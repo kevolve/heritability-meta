@@ -1,0 +1,2583 @@
+---
+title: "Coral Heritability Meta-analysis"
+subtitle: "Supplementary Code Documentation B: Model Selection and Diagnostics"
+author: "Kevin R Bairos-Novak"
+date: "Document last run on `r format(Sys.time(), '%Y-%m-%d')`"
+output:
+  html_document: 
+    df_print: kable
+    toc: yes
+    highlight: tango
+    theme: cerulean
+    number_sections: no
+    fig_width: 10
+    fig_height: 8
+    fig_caption: yes
+    code_folding: hide
+    self_contained: TRUE
+editor_options: 
+  chunk_output_type: console
+knit: (function(inputFile, encoding) { rmarkdown::render(inputFile, encoding = encoding, output_file = paste0(xfun::sans_ext(inputFile),"_",format(Sys.time(), '%Y-%m-%d'), ".html")) })
+---
+
+```{r, include=F}
+knitr::opts_chunk$set(echo = TRUE, comment="", 
+					  message=F, warning=F)
+patt <- "Supplementary_Code_Documentation_B_Model_Selection_and_Diagnostics"
+x <- paste0(patt,"_",format(Sys.time(), '%Y-%m-%d'), ".html")
+y <- list.files(pattern = glob2rx(paste0(patt,"*.html")))
+y <- y[!(y == x)]
+unlink(y, recursive=T)
+setwd("~/Documents/PhD Thesis/Heritability meta")
+
+myAIC <- function(..., aic=F, aicc=T, waic=F, 
+				  delta_aic=F, delta_aicc=T, pvals=F, 
+				  getmodel=F, param.list = NULL){
+	require(tidyverse)
+	if(getmodel==T){
+		mod.name <- as.character(list(...))
+		mod.out <- list(...)
+		mod.out <- lapply(mod.out, function(x) get(x))
+	} else {
+		mod.name <- eval(substitute(alist(...))) %>% as.character
+		mod.out <- list(...)
+	}
+	
+	# add additional optional arguments later...
+	dfs <- mod.out %>% map(anova) %>% map_dbl("m")
+	AICs <- mod.out %>% map_dbl(AIC)
+	AICcs <- mod.out %>% map_dbl(AIC, correct=T)
+	p <- mod.out %>% map(anova) %>% map_dbl("QMp")
+	
+	out <- data.frame(model=mod.name, df=dfs, AIC=AICs, AICc=AICcs, p=p) %>%
+		mutate(ΔAIC = AIC - min(AIC),
+				ΔAICc = AICc - min(AICc),
+				p = format(p, scientific=F, digits=2),
+				expAICc = exp(-0.5*ΔAICc),
+				wAICc = expAICc/max(expAICc),
+				expAICc = NULL) %>%
+		relocate(ΔAIC, .after="AIC") %>%
+		relocate(ΔAICc, .after="AICc") %>%
+		rename("Overall p-val"=p) %>% 
+		arrange(AICc)
+	
+	if(delta_aic==T) {out <- out %>% arrange(AIC)}
+	
+	if(!is.null(param.list)) {
+		possible.terms <- paste("x ~",paste(param.list, collapse="*")) %>%
+			map(as.formula) %>% map(terms.formula) %>%
+			map(~attr(.x, "term.labels")) %>% unlist
+		chars <- mod.out %>% map("formula.yi") %>% as.character()
+		terms <- chars %>% map(as.formula) %>% map(terms.formula) %>%
+			map(~attr(.x, "term.labels"))
+		
+		x <- matrix(nrow=0, ncol=length(possible.terms))
+		for (i in 1:length(mod.name)){
+			x <- rbind(x, possible.terms %in% terms[[i]] %>% as.numeric)
+		}
+		
+		i.x <- colSums(x)>0
+		x <- as.data.frame(x[,i.x]) * out$wAICc
+		colnames(x) <- possible.terms[i.x]
+		
+		rel.importance <- x %>%	summarise_all(sum) %>%
+			pivot_longer(everything()) %>%
+			mutate(norm_val = value/max(value)) %>%
+			arrange(-norm_val)
+	}
+	
+	if(aic == F) {out <- out %>% select(-AIC)}
+	if(aicc== F) {out <- out %>% select(-AICc)}
+	if(delta_aic==F) {out <- out %>% select(-ΔAIC)}
+	if(delta_aicc==F) {out <- out %>% select(-ΔAICc)}
+	if(waic==F) {out <- out %>% select(-wAICc)}
+	if(pvals==F) {out <- out %>% select(-`Overall p-val`)}
+	
+	if(!is.null(param.list)) {
+		out <- list(AICtable=out, rel.importance=rel.importance)
+	}
+	out
+}
+```
+
+```{=html}
+<style>
+.container { width: 1000px; }
+h2 { color: #f8f8f8; background-color: #437FAA; }
+h3 { color: #f8f8f8; background-color: #437FAA; text-align: center; }
+<!-- Get highlight from Terminal: pandoc --print-highlight-style tango -->
+</style>
+```
+
+
+# Start
+
+```{r, include=FALSE}
+# rm(list=ls())
+setwd("~/Documents/PhD Thesis/Heritability meta")
+
+library(readxl)
+library(tidyverse); theme_set(theme_light())
+library(metafor)
+library(patchwork)
+source('Functions/useful_functions.R')
+source('Functions/mlm.variance.distribution.R')
+
+# Load processed data:
+load("Data/heritability_estimates_processed.RData")
+# data.full <- data.full %>% filter(!(study == "Zhang et al.")) # duplicate estimate!
+data <- data.full %>% 
+	filter(trait != "gamete contribution") %>% 
+	mutate(trait = fct_drop(trait))
+dat_s <- data %>% 
+	filter(!(trait %in% c("photochemistry", "immune response"))) %>% 
+	mutate(trait = factor(trait))
+dat_sh <- data %>% 
+	filter(!(trait %in% c("photochemistry", "nutrient content", "immune response"))) %>% 
+	mutate(trait = factor(trait))
+dat_shg <- data %>% 
+	filter(trait %in% c("symbiont community", "survival", "nutrient content", "growth", "bleaching")) %>% 
+	filter(!(growth.form %in% c("columnar", "encrusting"))) %>%
+	mutate(trait = factor(trait), growth.form = factor(growth.form))
+dat_tm <- data %>% 
+	filter(!is.na(temp.diff)) %>%
+	filter(!(trait %in% c("symbiont community", "morphology", "gene expression"))) %>% 
+	mutate(trait = factor(trait),
+		   temp.manip = temp.manip.plus.others,
+		   temp.s = sqrt(temp.diff))
+dat_tm_nz <- dat_tm %>% filter(temp.diff >0) %>%
+	mutate(trait = factor(trait), 
+		   stage = factor(stage), 
+		   h2 = factor(h2),
+		   growth.form = factor(growth.form))
+
+
+# Specify final main model
+final.model.A <- rma(yi=val.log ~ trait*stage + h2, 
+					 vi=sv.log, data=dat_s, method="REML", test="knha")
+```
+
+------------------------------------------------------------------------
+
+# Summary of results
+
+When defining the base model architecture that includes all data (save
+for one estimate on the heritability of gamete compatibility), the
+optimal and most parsimonious explanatory variable was the trait type.
+In order of increasing relative heritability (not accounting for
+differences in heritability type):
+
+-   gene expression
+-   photochemistry
+-   growth
+-   nutrient content
+-   bleaching
+-   morphology
+-   symbiont community
+-   immune response
+-   survival
+
+In sub-analyses using smaller data subsets, life stage, heritability type, and growth form
+came out important, whereas temperature manipulation
+(binary yes/no), temperature differential (°C above
+normal/ambient/control temperature), and symbiont type (symbiotic or
+asymbiotic) were not.
+
+An overall model of trait type, and a sub-analysis model of trait type x life stage + heritability type was preferred through model selection. No other models were found. 
+
+
+# Overview of sample sizes
+
+Narrow-sense heritability is reported for 10 studies, broad-sense for 10
+studies, including one study reporting broad-sense and narrow-sense
+estimates (Carlon et al. 2011).
+
+```{r}
+table.plot("h2", "study", data.full) # only Carlon et al. study with multiple h2 values
+```
+
+```{r, eval=F}
+summarise.coverage("trait", "study", data.full)
+```
+
+Most studies (12/19) report on a single trait type and not multiple
+trait types. Three studies report on two trait types (Meyer et al. 2009;
+Manzello et al. 2019; Kenkel et al. 2015), two studies report on three
+trait types (Csázár et al. 2010; Quigley et al. 2020), and Zhang et al.
+(2019) and Wright et al. (2019) report on four and six trait types,
+respectively.
+
+Both immune response and gamete contribution trait types have only a
+single study contributing to their estimates. In the case of the latter,
+gamete contribution has only one estimate, limiting any inferences using
+models.
+
+```{r, eval=F}
+table.plot("trait", "species", data.full)
+data.full %>% group_by(species) %>% tally %>% arrange(-n)
+summarise.coverage("species", "study", data.full)$Y
+```
+
+Most heritability estimates are from Acropora millepora (48 estimates; 5
+separate studies), A. spathulata (12; 1), Porites astreoides (9; 2),
+Fabia fragum (6; 1), Orbicella faveolata (4; 3), and A. cervicornis (3;
+2).
+
+Most diversity of species/studies are covered by trait types such as
+growth, survival, bleaching, and symbiont community.
+
+# Model Selection Process
+
+## Complete Dataset
+
+Following the process of mixed model selection outlined by Zuur et al.
+(Mixed Effects Modelling Book, 2009, pp. 121-122) and Diggle et al.
+(2002), we:
+
+1.  Begin with a 'beyond optimal' model with as many fixed effects as
+    possible, given the available data
+2.  With the beyond optimal fixed effects, test for the optimal random
+    effects structure by comparing AIC among models fit using REML
+3.  Using the optimal random effects structure, compare fixed effects by
+    comparing AIC among models fit using ML
+4.  Refit the final mixed effects model using REML
+5.  Check final model diagnostics: funnel plots, fail safe number, Cook's distances, residual plots, and simulated data
+
+### Step 1: Begin with a *beyond optimal* model
+
+We have 4 main factors that cover the complete dataset:
+
+-   trait type (9 levels, including survival, growth, bleaching, etc.)
+
+-   heritability type (broad- or narrow-sense)
+
+-   coral life stage (larval, juvenile, adult)
+
+-   coral growth form (3 main types: corymbose, branching, massive; also
+    encrusting and columnar)
+
+Thus, our beyond optimal model is one that includes the main effects of
+all 4 factors (additive model). As seen later on, we cannot examine
+interactions, given factor combinations being missing For example,
+heritability estimates for narrow-sense heritability exist only for 6/9
+trait types, so no interaction between trait type x heritability type
+can be properly examined without removing the 3 trait types with only
+broad-sense heritability estimates.
+
+```{r, eval=F}
+summarise.coverage("trait", "h2", data)$X # 9 broad, 6 narrow
+```
+
+### Step 2: Select random effects structure
+
+Next, we fit different random effect structures, including nested
+(3-level) models that include either study ID or species ID as an upper
+level, with estimate ID nested within (sampling variance acts as the
+3rd, most basal level in a meta-model). We also fit similar models with
+one or both of study/species ID and estimate ID fixed at zero, as well
+as a 'null' random effects model, where all random effects are fit at
+zero (essentially a fixed effects model).
+
+```{r}
+
+m.study.nested <- rma.mv(yi=val.log ~ trait + h2 + growth.form + stage,
+						 V=sv.log, random = ~1|study/est.id, 
+						 data=data, method="REML", tdist=T,
+						 sigma2 = c(NA, NA))
+m.spp.nested <- rma.mv(yi=val.log  ~ trait + h2 + growth.form + stage,
+						 V=sv.log, random = ~1|species/est.id, 
+						 data=data, method="REML", tdist=T,
+						 sigma2 = c(NA, NA))
+m.only.est <- rma.mv(yi=val.log ~ trait + h2 + growth.form + stage,
+						 V=sv.log, random = ~1|study/est.id, 
+						 data=data, method="REML", tdist=T,
+						 sigma2 = c(0, NA)) # same as random = ~1|est.id
+m.only.study <- rma.mv(yi=val.log ~ trait + h2 + growth.form + stage,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=data, method="REML", tdist=T,
+					  sigma2 = c(NA, 0)) # same as random = ~1|study
+m.only.spp <- rma.mv(yi=val.log ~ trait + h2 + growth.form + stage,
+					  V=sv.log, random = ~1|species/est.id, 
+					  data=data, method="REML", tdist=T,
+					  sigma2 = c(NA, 0)) # same as random = ~1|species
+m.no.reff <- rma.mv(yi=val.log ~ trait + h2 + growth.form + stage,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=data, method="REML", tdist=T,
+					  sigma2 = c(0, 0)) # no random effects
+
+TableS1 <- myAIC(m.study.nested, m.spp.nested, m.only.est, m.only.study, m.only.spp, m.no.reff) %>%
+	mutate(model = fct_recode(model,
+		"Estimate ID nested in study ID" = "m.study.nested",
+		"Estimate ID nested in species" = "m.spp.nested",
+		"Study ID only" = "m.only.study",
+		"Species only" = "m.only.spp",
+		"Estimate ID only" = "m.only.est",
+		"No random effect" = "m.no.reff"))
+write.csv(TableS1, file="Suppl Tables//TableS1.csv", row.names=F)
+TableS1
+
+```
+
+Here, we see that the model with estimate ID nested within study ID is
+preferred (`random=~1|study/est.id, sigma2 = c(NA,NA)`), since it has
+the lowest relative AICc value.
+
+Thus, we continue on with this random effects structure when deciding
+our fixed effects structure.
+
+### Step 3: Select fixed effects structure
+
+Next, we select the optimal by comparing model AICc values of all
+possible fixed-effect models for factors that exist for the complete
+dataset:
+
+-   trait type (*t*; 9 levels: survival, growth, gene expression, etc.)
+
+-   heritability type (*h*; 2 levels: $h^2$ or $H^2$)
+
+-   coral growth form (*g*; 4 levels: branching, massive/columnar,
+    corymbose, or encrusting)
+
+-   coral life stage (*s*; 3 levels: larval, juvenile, adult)
+
+We also have a factor of symbiont type (symbiotic or asymbiotic),
+however, there are only 4 estimates with asymbiotic individuals, and
+these all involve coral larvae from broadcast-spawners. Thus, there are
+too few estimates and too little coverage to compare at this stage.
+Similarly, temperature was not manipulated for a few of the studies, and
+thus is not assessed here either.
+
+We fit all combinations of additive factors possible, excluding any
+interactions at this point, as the data are not complete for a number of
+factor combinations. We display only the top 10 models by AICc (given it
+is different in all models to AIC, our N sample size is too small for
+the k model parameters being estimated!).
+
+Again, because the data are not complete for interactions at this stage,
+we examine only additive models with the various factors.
+
+```{r}
+dat <- data %>% mutate(t = trait, h = h2, g = growth.form, s = stage)
+mod_names <- ls(pattern = "m.fixed.")
+do.call("rm", as.list(mod_names))
+
+# One-ways with less and less other terms:
+m.fixed.1way.t.h.g.s <- rma.mv(yi=val.log ~ t + h + g + s, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+m.fixed.1way.t.h.g <- rma.mv(yi=val.log ~ t + h + g, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+m.fixed.1way.t.h.s <- rma.mv(yi=val.log ~ t + h + s, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+m.fixed.1way.t.g.s <- rma.mv(yi=val.log ~ t + g + s, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+m.fixed.1way.h.g.s <- rma.mv(yi=val.log ~ h + g + s, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+m.fixed.1way.t.h <- rma.mv(yi=val.log ~ t + h, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+m.fixed.1way.t.g <- rma.mv(yi=val.log ~ t + g, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+m.fixed.1way.t.s <- rma.mv(yi=val.log ~ t + s, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+m.fixed.1way.h.g <- rma.mv(yi=val.log ~ h + g, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+m.fixed.1way.h.s <- rma.mv(yi=val.log ~ h + s, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+m.fixed.1way.g.s <- rma.mv(yi=val.log ~ g + s, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+
+m.fixed.1way.t <- rma.mv(yi=val.log ~ t, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+m.fixed.1way.h <- rma.mv(yi=val.log ~ h, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+m.fixed.1way.g <- rma.mv(yi=val.log ~ g, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+m.fixed.1way.s <- rma.mv(yi=val.log ~ s, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+m.fixed.1way.null <- rma.mv(yi=val.log ~ 1, 
+								 random = ~1|study/est.id, V=sv.log,
+								 data=dat, method="ML", tdist=T)
+
+
+mod_names <- ls(pattern = "m.fixed")
+param_list=c("t", "h", "g", "s")
+table1 <- do.call(myAIC, as.list(c(mod_names, getmodel=T, 
+									 param.list = list(param_list))))
+# table1$rel.importance
+
+AICt <- table1$AICtable %>% filter(model == "m.fixed.1way.t") %>% pull(4) %>% round(2)
+AICth <- table1$AICtable %>% filter(model == "m.fixed.1way.t.h") %>% pull(4) %>% round(2)
+AICts <- table1$AICtable %>% filter(model == "m.fixed.1way.t.s") %>% pull(4) %>% round(2)
+AICths <- table1$AICtable %>% filter(model == "m.fixed.1way.t.h.s") %>% pull(4) %>% round(2)
+
+# head(table1$AICtable)
+
+TableS2 <- head(table1$AICtable) %>%
+	mutate(model = fct_recode(model,
+		"trait" = "m.fixed.1way.t",
+		"trait + heritability type" = "m.fixed.1way.t.h",
+		"trait + life stage" = "m.fixed.1way.t.s",
+		"trait + heritability type + life stage" = "m.fixed.1way.t.h.s",
+		"trait + growth form + life stage" = "m.fixed.1way.t.g.s",
+		"trait + growth form" = "m.fixed.1way.t.g"))
+write.csv(TableS2, file="Suppl Tables/TableS2.csv", row.names=F)
+TableS2
+
+```
+
+The model with the lowest AICc is one with only trait type as a fixed
+effect, followed closely (within ΔAICc \< 2) by a model of trait + life stage (ΔAICc =
+`r AICts`), and trait +
+heritability type (ΔAICc = `r AICth`), and finally, trait + heritability + stage (ΔAICc =
+`r AICths`). and finally a few models including life stage,
+heritability, and trait type. However, clearly, there are data
+limitations present that limit the number of model parameters possible.
+Thus, we accept trait type by itself as the core model for the complete
+dataset.
+
+```{r}
+
+
+rbind(
+	data.frame(
+		Model = rep(paste0("~ trait (ΔAICc=", AICt,")")),
+		Parameter = names(coef(m.fixed.1way.t)), 
+		Estimate = coef(m.fixed.1way.t),
+		SE = m.fixed.1way.t$se),
+	data.frame(
+		Model = rep(paste0("~ trait + life stage (ΔAICc=", AICts,")")),
+		Parameter = names(coef(m.fixed.1way.t.s)), 
+		Estimate = coef(m.fixed.1way.t.s),
+		SE = m.fixed.1way.t.s$se),
+	data.frame(
+		Model = rep(paste0("~ trait + h2 (ΔAICc=", AICth,")")),
+		Parameter = names(coef(m.fixed.1way.t.h)), 
+		Estimate = coef(m.fixed.1way.t.h),
+		SE = m.fixed.1way.t.h$se),
+	data.frame(
+		Model = rep(paste0("~ trait + h2 + life stage (ΔAICc=", AICths,")")),
+		Parameter = names(coef(m.fixed.1way.t.h.s)), 
+		Estimate = coef(m.fixed.1way.t.h.s),
+		SE = m.fixed.1way.t.h.s$se)) %>%
+	mutate(Parameter = factor(Parameter),
+		   Parameter = fct_relevel(Parameter, "intrcpt")) %>%
+	ggplot(aes(x=Estimate, y=Parameter, color=Model)) +
+	geom_vline(xintercept=0, linetype="dashed") +
+	geom_pointrange(aes(xmin = Estimate - SE, xmax = Estimate + SE), position = position_dodge(width=0.3)) + 
+	labs(x="Parameter estimate (log[X+0.2] scale) ± SE") +
+	theme(legend.position="top", legend.direction="vertical")
+
+```
+
+The plot shows relatively similar coefficient estimates and uncertainty
+in the top 4 models. However, we go with the best model of only trait
+type as a predictor.
+
+### Step 4: Fit final model with REML
+
+Due to the small effect size of life stage in the trait + life stage model, and the nearly identical AICc value (difference of 0.15), we fit our final model using trait type only as:
+
+$$ logit(h^2 + 0.2) \sim N(\mu, \sigma^2) \\
+\mu = trait_k \,  + \, \epsilon_{i} $$
+
+where $\sigma^2$ are the estimated amount of heterogeneity in the
+studies/estimates, calculated using an inverse variance weighting method
+via package `metafor` that accounts for uncertainty in each estimate,
+and $\epsilon$ is the residual error for each estimate.
+
+```{r}
+# Using subset data
+final.model <- rma.mv(yi=val.log ~ trait,
+						 V=sv.log, random = ~1|study/est.id, 
+						 data=data, method="REML", tdist=T)
+final.model
+save(final.model, file="Models/final.model.Rdata")
+
+x <- mlm.variance.distribution(final.model, suppress.plot=F)
+```
+
+------------------------------------------------------------------------
+
+### Step 5: Check final model diagnostics
+
+Lastly, we check the final model diagnostics, such as examining the
+funnel plot for asymmetry indicating publishing bias, in addition to simulating data
+based on the final model to examine if it loosely resembles the data
+observed.
+
+#### Funnel plot
+
+```{r}
+
+x <- resid(final.model)
+hist(x) # looks approx. normal!
+
+## Model checks:
+par(mfrow=c(2,1))
+funnel(final.model)
+funnel(final.model, yaxis="vinv")
+par(mfrow=c(1,1))
+
+ranktest(final.model) # p = 0.72
+
+```
+
+Visually, the funnel plot appears to be slightly asymmetric in favour of studies reporting lower heritabilities, but a rank correlation test for funnel plot asymmetry was not statistically significant (Kendall's $\tau = = -0.025$, $P = 0.72$), indicating no apparent publication bias.
+
+#### Fail-safe number
+
+```{r}
+
+fsn(yi=val.log, vi=sv.log, data=data, type="Rosenberg") # N=1287 to get no significance (but assumes fixed effects)
+# Number of studies x5 + 10:
+
+length(unique(data$study))*5 + 10
+
+```
+
+#### Cook's distance
+
+```{r}
+cdist <- cooks.distance(final.model, reestimate=FALSE)
+cdist.i <- which(cdist >2)
+plot(cdist)
+points(cdist.i, cdist[cdist.i], col="red", pch=16)
+data[cdist.i,] %>% select(study, species, val, trait) %>%
+	cbind(., cooks = round(cdist[cdist.i], 2))
+update(final.model, .~., data[-cdist.i,])
+```
+
+The main influential point is one for immune response, which drives the
+average estimate for immune response much higher than other values for
+immune response. Note that all the values for the immune response trait
+come from the same study (Wright et al. 2019), and so the values are
+already to be interpreted cautiously.
+
+#### Residuals and simulated data
+
+```{r}
+
+plot(fitted(final.model), rstandard(final.model)$z)
+abline(h=0, lty=2)
+plot(residuals(final.model, type="pearson"))
+abline(h=0, lty=2)
+
+
+# Simulate new data given the parameter values of the data and same variance structure, plot on real data to see if it is similar
+xsim <- simulate(final.model, 100) %>%
+	mutate(true.val = data$val.log,
+		   weighting = 1/data$sv.log) %>%
+	pivot_longer(cols=-c(true.val, weighting)) %>%
+	select(name, true.val, sim.val = value, weighting)
+xsim %>%
+	ggplot(aes(x=true.val, y=sim.val)) +
+	geom_point(aes(col=weighting), alpha=0.05) +
+	geom_abline(slope=1, intercept=0, linetype="dashed") + 
+	scale_colour_viridis_c() +
+	scale_x_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
+	scale_y_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1))
+# More accuracy in the middle, definitely!
+
+# reruns model, based around the same variance/covariance structures but with simulated data.
+xsim %>% 
+	ggplot(aes(y=weighting)) + 
+	geom_point(aes(x=sim.val), col="red", size=2, alpha=0.05) +
+	geom_point(data= filter(xsim, name == "sim_1"),
+			   aes(x=true.val),
+			   col="blue", size=2, alpha=0.9) +	
+	scale_x_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
+	labs(x="Heritability estimate", y=expression("Weighting (1/SE"^2*")"))
+
+# Seems that the model is in general simulating the true data ok!
+# Main problem is that values are simulating beyond the bounds of possible heritability.
+```
+
+
+------------------------------------------------------------------------
+
+### Preamble on further models
+
+Note that the data was previously not complete enough to examine
+interactions between explanatory variables properly. For example, some factors such as heritability type and life stage have only a single level represented within some trait types, and some traits involve entirely one level of another factor, e.g., all estimates for nutrient content, immune response, and photochemistry come from single studies, and thus all have only one of the two heritability types within, thus precluding direct comparisons within these trait types.
+
+Thus, to better compare interactions, we conduct separate analyses on subsetted data.
+
+## Which predictor variable first?
+
+To guide our analysis further, we determine which additional factors can be examined in combination with trait type, and compare the sample sizes of each comparison to determine the order of the sub-analyses.
+
+```{r}
+
+p1 <- data %>% table.plot("stage", "trait", .) # singular for photochemistry, immune response
+p_stage <- table.plot("stage", "trait", dat_s)
+
+p2 <- data %>% table.plot("h2", "trait", .) # singular for photochemistry, nutrient content, immune response
+p_h2 <- table.plot("h2", "trait", dat_sh)
+
+p3 <- data %>% table.plot("growth.form", "trait", .) # singular for traits: photochemistry, immune response, morphology, immune response, gene expression; singular for columnar and encrusting growth forms
+p_growthform <- table.plot("growth.form", "trait", dat_shg)
+
+p4 <- data %>% 	filter(!is.na(temp.diff)) %>%
+	table.plot("temp.manip.plus.others", "trait", .) # singular for traits: photochemistry, immune response, morphology, immune response, gene expression; singular for columnar and encrusting growth forms
+p_tempmanip <- table.plot("temp.manip.plus.others", "trait", dat_tm)
+
+require(patchwork)
+(p1 | p2) / (p3 | p4)
+
+```
+
+We see there there are a number of rows/columns with less than 2 levels (i.e. 'singular' terms), which make it impossible to estimate interaction terms for these factor combinations, due to the singularity. Thus, we subset these rows/columns and plot the remaining data to examine the sample sizes and factor levels remaining.
+
+```{r}
+require(patchwork)
+(p_stage | p_h2) / (p_growthform | p_tempmanip)
+```
+
+Both life stage and heritability type use similar levels, and thus can be combined for the smaller sample size of heritability type. Life stage thus must be examined first, then heritability type and life stage can be examined together for the smaller data subset. Growth form also uses an even more narrow range of studies, and thus we can examine it after looking at the latter two.
+
+Finally, temperature manipulation results in a few different trait types being removed (e.g., morphology, symbiont community), and the addition of photochemistry, and the data within each trait type are also dissimilar due to some studies being observational and thust being removed. Thus, this analysis must be done on its own, and factors re-added on a case-by-case basis.
+
+## Sub-analysis A: Model selection on dataset allowing a trait type x **life stage** interaction
+
+### Step 0: View 'complete' dataset
+
+```{r}
+dat_s %>% table.plot("stage", "trait", .)
+# exclude photochemistry, immune response
+```
+
+Using the smaller data subset, we can now examine possible interactions between trait type and life stage, and include additive terms for other predictors.
+
+### Step 1: Define beyond optimal model
+
+The beyond-optimal model in this case is a full analysis of trait type x life stage:
+$$ logit(h^2) \sim N(\mu, \tau^2) \\
+\mu = trait \times stage + h^2type + growth\,form +  \epsilon_{i} $$
+
+### Step 2: Select optimal random effects
+
+```{r}
+
+m.study.nested <- rma.mv(yi=val.log ~ trait * stage + h2 + growth.form,
+						 V=sv.log, random = ~1|study/est.id, 
+						 data=dat_s, method="REML", tdist=T,
+						 sigma2 = c(NA, NA))
+m.spp.nested <- rma.mv(yi=val.log  ~ trait * stage + h2 + growth.form,
+						 V=sv.log, random = ~1|species/est.id, 
+						 data=dat_s, method="REML", tdist=T,
+						 sigma2 = c(NA, NA))
+m.only.est <- rma.mv(yi=val.log ~ trait * stage + h2 + growth.form,
+						 V=sv.log, random = ~1|study/est.id, 
+						 data=dat_s, method="REML", tdist=T,
+						 sigma2 = c(0, NA)) # same as random = ~1|est.id
+m.only.study <- rma.mv(yi=val.log ~ trait * stage + h2 + growth.form,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=dat_s, method="REML", tdist=T,
+					  sigma2 = c(NA, 0)) # same as random = ~1|study
+m.only.spp <- rma.mv(yi=val.log ~ trait * stage + h2 + growth.form,
+					  V=sv.log, random = ~1|species/est.id, 
+					  data=dat_s, method="REML", tdist=T,
+					  sigma2 = c(NA, 0)) # same as random = ~1|species
+m.no.reff <- rma.mv(yi=val.log ~ trait * stage + h2 + growth.form,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=dat_s, method="REML", tdist=T,
+					  sigma2 = c(0, 0)) # no random effects
+
+
+TableS3 <- myAIC(m.study.nested, m.spp.nested, m.only.est, m.only.study, m.only.spp, m.no.reff) %>%
+	mutate(model = fct_recode(model,
+		"Estimate ID nested in study ID" = "m.study.nested",
+		"Estimate ID nested in species" = "m.spp.nested",
+		"Study ID only" = "m.only.study",
+		"Species only" = "m.only.spp",
+		"Estimate ID only" = "m.only.est",
+		"No random effect" = "m.no.reff"))
+write.csv(TableS3, file="Suppl Tables/TableS3.csv", row.names=F)
+TableS3
+
+rm(m.study.nested, m.spp.nested, m.only.est, m.only.study, m.only.spp, m.no.reff)
+```
+
+A random effects structure of estimate ID-only is preferred (i.e. to treat estimate IDs as sample sizes of same units). Next preferred is ΔAICc = 1.34.
+
+
+### Step 3: Select optimal fixed effects
+
+```{r}
+
+mod_names <- ls(pattern = "m.fixed.")
+do.call("rm", as.list(mod_names))
+
+m.fixed.txs.h.g <- rma.mv(yi=val.log ~ trait*stage + h2 + growth.form,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.t.s.h.g <- rma.mv(yi=val.log ~ trait + stage + h2 + growth.form,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+
+
+m.fixed.txs.h <- rma.mv(yi=val.log ~ trait*stage + h2,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.txs.g <- rma.mv(yi=val.log ~ trait*stage + growth.form,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.txs <- rma.mv(yi=val.log ~ trait*stage,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+
+
+m.fixed.t.s.g <- rma.mv(yi=val.log ~ trait + stage + growth.form,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.t.s.h <- rma.mv(yi=val.log ~ trait + stage + h2,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.t.h.g <- rma.mv(yi=val.log ~ trait + h2 + growth.form,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.s.h.g <- rma.mv(yi=val.log ~ stage + h2 + growth.form,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+
+
+m.fixed.t.s <- rma.mv(yi=val.log ~ trait + stage,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.t.h <- rma.mv(yi=val.log ~ trait + h2,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.t.g <- rma.mv(yi=val.log ~ trait + growth.form,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.s.h <- rma.mv(yi=val.log ~ stage + h2,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.s.g <- rma.mv(yi=val.log ~ stage + growth.form,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.h.g <- rma.mv(yi=val.log ~ h2 + growth.form,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+
+
+m.fixed.t <- rma.mv(yi=val.log ~ trait,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.s <- rma.mv(yi=val.log ~ stage,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.h <- rma.mv(yi=val.log ~ h2,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.g <- rma.mv(yi=val.log ~ growth.form,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+m.fixed.null <- rma.mv(yi=val.log ~ 1,
+					  random = ~1|study/est.id, V=sv.log,
+					  data=dat_s, method="ML", tdist=T, sigma2 = c(0, NA))
+
+mod_names <- ls(pattern = "m.fixed.")
+TableS4 <- head(do.call("myAIC", as.list(c(mod_names, getmodel=T)))) %>%
+	mutate(model = fct_recode(model,
+		"trait x life stage + heritability type" = "m.fixed.txs.h",
+		"trait x life stage" = "m.fixed.txs",
+		"trait x life stage + growth form" = "m.fixed.txs.g",
+		"trait x life stage + heritability type + growth form" = "m.fixed.txs.h.g",
+		"trait + life stage + growth form" = "m.fixed.t.s.g",
+		"trait + heritability type + growth form" = "m.fixed.t.h.g"))
+write.csv(TableS4, file="Suppl Tables/TableS4.csv", row.names=F)
+TableS4
+# trait x life stage preferred!
+
+# Double-check with rma fits (knha method is slightly different from rma.mv with t-distributed CIs):
+# m.fixed.txs.h <- rma(yi=val.log ~ trait*stage + h2, 
+# 					 vi=sv.log, data=dat_s, method="ML", test="knha")
+# m.fixed.txs.g <- rma(yi=val.log ~ trait*stage + growth.form, 
+# 					 vi=sv.log, data=dat_s, method="ML", test="knha")
+# m.fixed.txs <- rma(yi=val.log ~ trait*stage, 
+# 					 vi=sv.log, data=dat_s, method="ML", test="knha")
+# myAIC(m.fixed.txs.h, m.fixed.txs.g, m.fixed.txs)
+# model of trait x life stage + heritability type is still preferred!
+
+```
+
+The trait x life stage + heritability fixed effect structure is optimal. The next closest model drops the effect of heritability type, and is over 2 ΔAICc away (ΔAICc = 2.6).
+
+### Step 4: Fit final model of life stage/heritability type
+
+```{r}
+final.model.A <- rma(yi=val.log ~ trait*stage + h2, vi=sv.log, 
+					 data=dat_s, method="REML", test="knha")
+final.model.A
+save(final.model.A, file="Models/final.model.A.Rdata")
+
+final.model.A$I
+final.model.A$k - final.model.A$p # df for parameter tests
+```
+
+Estimate ID-only, so all residual heterogeneity is: 
+$I^2$ = 46.10%, N = 74
+
+### Step 5: Check final model diagnostics
+
+#### Funnel plot
+
+```{r}
+
+x <- resid(final.model.A)
+hist(x) # looks approx. normal, except for one strong outlier at -1.5
+
+par(mfrow=c(2,1))
+funnel(final.model.A)
+update(final.model.A, .~., data=dat_s[x!=0,]) %>%
+	funnel(., yaxis="vinv")
+par(mfrow=c(1,1))
+
+```
+
+#### Fail-safe number
+
+```{r}
+
+fsn(yi=val.log, vi=sv.log, data=dat_s, type="Rosenberg") # N=513 to get no significance (but assumes fixed effects)
+# Number of studies x5 + 10:
+length(unique(dat_s$study))*5 + 10
+```
+
+
+#### Cook's distance
+
+```{r}
+cdist <- cooks.distance(final.model.A, reestimate=FALSE)
+plot(cdist)
+cdist.i <- which(cdist >2)
+points(cdist.i, cdist[cdist.i], col="red", pch=16)
+data[cdist.i,] %>% select(study, species, val, trait, stage, h2) %>%
+	cbind(., cooks = round(cdist[cdist.i], 2))
+update(final.model.A, .~., data=dat_s[-cdist.i,]) # effect of juv:growth n.s.
+update(final.model.A, .~., data=dat_s[-cdist.i[1],]) # immune : temp interaction remains
+update(final.model.A, .~., data=dat_s[-cdist.i[2],]) # no interaction after removal!
+```
+
+#### Residuals and simulated data
+
+```{r}
+
+plot(fitted(final.model.A), rstandard(final.model.A)$z)
+abline(h=0, lty=2)
+plot(residuals(final.model.A, type="pearson"))
+abline(h=0, lty=2)
+# Not amazing, not terrible
+
+# Simulate new data given the parameter values of the data and same variance structure, plot on real data to see if it is similar
+xsim <- simulate(final.model.A, 100) %>%
+	mutate(true.val = dat_s$val.log,
+		   weighting = 1/dat_s$sv.log) %>%
+	pivot_longer(cols=-c(true.val, weighting)) %>%
+	select(name, true.val, sim.val = value, weighting)
+xsim %>%
+	ggplot(aes(x=true.val, y=sim.val)) +
+	geom_point(aes(col=weighting), alpha=0.05) +
+	geom_abline(slope=1, intercept=0, linetype="dashed") + 
+	scale_colour_viridis_c() +
+	scale_x_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
+	scale_y_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1))
+
+
+# reruns model, based around the same variance/covariance structures but with simulated data.
+xsim %>% 
+	ggplot(aes(y=weighting)) + 
+	geom_point(aes(x=sim.val), col="red", size=2, alpha=0.05) +
+	geom_point(data= filter(xsim, name == "sim_1"),
+			   aes(x=true.val),
+			   col="blue", size=2, alpha=0.9) +	
+	scale_x_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
+	labs(x="Heritability estimate", y=expression("Weighting (1/SE"^2*")"))
+
+# Seems that the model is in general simulating the true data ok!
+# Main problem is that values are simulating beyond the bounds of possible heritability.
+```
+
+------------------------------------------------------------------------
+
+## Sub-analysis B: Model selection on dataset allowing a trait type x **heritability type** interaction
+
+Main result: trait type x heritability type interaction supported. Most
+of the interaction is likely driven by the gene expression trait level,
+where one estimate of narrow-sense h2 is higher than all broad-sense
+estimates of H2.
+
+### Step 0: View 'complete' dataset
+
+```{r}
+dat_sh %>% table.plot("h2", "trait", .) # subset allows examination of h2 x trait type
+dat_sh %>% table.plot("stage", "trait", .) # can also look at life stage interaction too!
+dat_sh %>% table.plot("stage", "h2", .)
+dat_sh %>% table.plot("stage", "growth.form", .) # some bad levels for growth form!
+```
+
+The data subset allows for the examination of h2 x trait type interaction, as well as the trait x life stage interaction seen previously!
+
+
+### Step 1: Define beyond optimal model
+
+The beyond-optimal model in this case is a full analysis of trait type x heritability type + trait type x life stage, plus additive effects:
+$$ logit(h^2) \sim N(\mu, \tau^2) \\
+\mu = trait \times stage + trait \times h^2type + growth\,form +  \epsilon_{i} $$
+
+### Step 2: Select optimal random effects
+
+```{r}
+
+m.study.nested <- rma.mv(yi=val.log ~ trait * h2 + trait * stage + growth.form,
+						 V=sv.log, random = ~1|study/est.id, 
+						 data=dat_sh, method="REML", tdist=T,
+						 sigma2 = c(NA, NA))
+m.spp.nested <- rma.mv(yi=val.log ~ trait * h2 + trait * stage + growth.form,
+						 V=sv.log, random = ~1|species/est.id, 
+						 data=dat_sh, method="REML", tdist=T,
+						 sigma2 = c(NA, NA))
+m.only.est <- rma.mv(yi=val.log ~ trait * h2 + trait * stage + growth.form,
+						 V=sv.log, random = ~1|study/est.id, 
+						 data=dat_sh, method="REML", tdist=T,
+						 sigma2 = c(0, NA)) # same as random = ~1|est.id
+m.only.study <- rma.mv(yi=val.log ~ trait * h2 + trait * stage + growth.form,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=dat_sh, method="REML", tdist=T,
+					  sigma2 = c(NA, 0)) # same as random = ~1|study
+m.only.spp <- rma.mv(yi=val.log ~ trait * h2 + trait * stage + growth.form,
+					  V=sv.log, random = ~1|species/est.id, 
+					  data=dat_sh, method="REML", tdist=T,
+					  sigma2 = c(NA, 0)) # same as random = ~1|species
+m.no.reff <- rma.mv(yi=val.log ~ trait * h2 + trait * stage + growth.form,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=dat_sh, method="REML", tdist=T,
+					  sigma2 = c(0, 0)) # no random effects
+
+
+TableS5 <- myAIC(m.study.nested, m.spp.nested, m.only.est, m.only.study, m.only.spp, m.no.reff) %>%
+	mutate(model = fct_recode(model,
+		"Estimate ID nested in study ID" = "m.study.nested",
+		"Estimate ID nested in species" = "m.spp.nested",
+		"Study ID only" = "m.only.study",
+		"Species only" = "m.only.spp",
+		"Estimate ID only" = "m.only.est",
+		"No random effect" = "m.no.reff"))
+write.csv(TableS5, file="Suppl Tables/TableS5.csv", row.names=F)
+TableS5
+
+rm(m.study.nested, m.spp.nested, m.only.est, m.only.study, m.only.spp, m.no.reff)
+
+```
+The optimal model is using study ID-only, however the second-most preferred model uses estimate ID only, and ΔAICc = 0.27, so close call either way.
+Let's continue with study ID.
+
+
+### Step 3: Select optimal fixed effects
+
+```{r}
+mod_names <- ls(pattern = "m.fixed.")
+do.call("rm", as.list(mod_names))
+
+m.fixed.txh.txs.g <- rma.mv(yi=val.log ~ trait*h2 + trait*stage + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.txh.txs <- rma.mv(yi=val.log ~ trait*h2 + trait*stage,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+
+m.fixed.txh.s.g <- rma.mv(yi=val.log ~ trait*h2 + stage + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.txh.s <- rma.mv(yi=val.log ~ trait*h2 + stage,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.txh.g <- rma.mv(yi=val.log ~ trait*h2 + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.txh <- rma.mv(yi=val.log ~ trait*h2,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+
+m.fixed.txs.h.g <- rma.mv(yi=val.log ~ trait*stage + h2 + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.txs.h <- rma.mv(yi=val.log ~ trait*stage + h2,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.txs.g <- rma.mv(yi=val.log ~ trait*stage + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.txs <- rma.mv(yi=val.log ~ trait*stage,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+
+m.fixed.t.s.h.g <- rma.mv(yi=val.log ~ trait + stage + h2 + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.t.s.h <- rma.mv(yi=val.log ~ trait + stage + h2,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.t.s.g <- rma.mv(yi=val.log ~ trait + stage + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.t.h.g <- rma.mv(yi=val.log ~ trait + h2 + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.s.h.g <- rma.mv(yi=val.log ~ stage + h2 + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+
+m.fixed.t.s <- rma.mv(yi=val.log ~ trait + stage,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.t.h <- rma.mv(yi=val.log ~ trait + h2,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.t.g <- rma.mv(yi=val.log ~ trait + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.s.h <- rma.mv(yi=val.log ~ stage + h2,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.s.g <- rma.mv(yi=val.log ~ stage + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.h.g <- rma.mv(yi=val.log ~ h2 + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+
+
+m.fixed.t <- rma.mv(yi=val.log ~ trait,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.s <- rma.mv(yi=val.log ~ stage,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.h <- rma.mv(yi=val.log ~ h2,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.g <- rma.mv(yi=val.log ~ growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.null <- rma.mv(yi=val.log ~ 1,
+							V=sv.log, random = ~1|study/est.id, data=dat_sh,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+
+
+mod_names <- ls(pattern = "m.fixed.")
+TableS6 <- head(do.call("myAIC", as.list(c(mod_names, getmodel=T)))) %>%
+	mutate(model = fct_recode(model,
+		"trait x life stage" = "m.fixed.txs",
+		"trait x life stage + heritability type" = "m.fixed.txs.h",
+		"trait x life stage + trait x heritability type" = "m.fixed.txh.txs",
+		"trait x heritability type + life stage" = "m.fixed.txh.s",
+		"trait + heritability type" = "m.fixed.txh",
+		"trait x life stage + growth form" = "m.fixed.txs.g"))
+write.csv(TableS6, file="Suppl Tables/TableS6.csv", row.names=F)
+TableS6
+
+```
+
+A model of trait type x life stage only is preferred! The next closest model is
+one with trait type x life stage + heritability type (ΔAICc = 2.15).
+
+### Step 4: Fit final model of heritability type
+
+```{r}
+final.model.B <- rma.mv(yi=val.log ~ trait*stage, 
+					  V=sv.log, random = ~1|study/est.id,
+					  data=dat_sh, method="REML", tdist=T, sigma2 = c(NA, 0))
+rma(yi=val.log ~ trait*stage, 
+					  vi=sv.log, random = ~1|study,
+					  data=dat_sh, method="REML", test="knha")
+# final.model.B
+save(final.model.B, file="Models/final.model.B.Rdata")
+
+mlm.variance.distribution(final.model.B)
+final.model.B$k - final.model.B$p
+```
+
+Without the effect of heritability type, juvenile bleaching also is a significant interaction term!
+
+### Step 5: Check final model diagnostics
+
+#### Funnel plot
+
+```{r}
+
+x <- resid(final.model.B)
+hist(x) # looks approx. normal, except for one strong outlier at -1.5
+
+par(mfrow=c(2,1))
+funnel(final.model.B)
+funnel(final.model.B, yaxis = "vinv")
+par(mfrow=c(1,1))
+
+dat_sh[x < -1,] %>% select(study, species, trait, stage, h2, val)
+
+# update(final.model.B, .~., data=dat_sh[x > -1,]) %>%
+	# funnel() # Funnel looks good once that one point is removed!
+```
+
+#### Fail-safe number and Cook's distance
+
+```{r}
+
+fsn(yi=val.log, vi=sv.log, data=dat_sh, type="Rosenberg") # N=513 to get no significance (but assumes fixed effects)
+# Number of studies x5 + 10:
+length(unique(dat_sh$study))*5 + 10
+
+
+cdist <- cooks.distance(final.model.B, reestimate=FALSE)
+plot(cdist)
+cdist.i <- which(cdist >2)
+points(cdist.i, cdist[cdist.i], col="red", pch=16)
+dat_sh[cdist.i,] %>% select(study, trait, stage, h2, val) %>% mutate(cdist = cdist[cdist.i])
+update(final.model.B, .~., data=dat_sh[-cdist.i[1],])
+
+# dat_sh %>% table.plot("stage", "trait", .) 
+
+```
+
+Plot the coefficients with different model datasets:
+```{r}
+dat_sh.out1 <- update(final.model.B, .~., data=dat_sh[-cdist.i[1],])
+dat_sh.out2 <- update(final.model.B, .~., data=dat_sh[-cdist.i[2],])
+dat_sh.out3 <- update(final.model.B, .~., data=dat_sh[-cdist.i[3],])
+dat_sh.out4 <- update(final.model.B, .~., data=dat_sh[-cdist.i[4],])
+dat_sh.out5 <- update(final.model.B, .~., data=dat_sh[-cdist.i[5],])
+dat_sh.out.all <- update(final.model.B, .~., data=dat_sh[-cdist.i[c(1,2,3,5)],])
+
+
+rbind(
+	data.frame(
+		Model = rep(" Original model fit"),
+		Parameter = names(coef(final.model.B)), 
+		Estimate = coef(final.model.B),
+		SE = final.model.B$se),
+	data.frame(
+		Model = rep(paste0(" without Kenkel et al. 2015 - juvenile survival\nCook's dist = ",round(cdist[cdist.i[1]],1))),
+		Parameter = names(coef(dat_sh.out1)), 
+		Estimate = coef(dat_sh.out1),
+		SE = dat_sh.out1$se),
+	data.frame(
+		Model = rep(paste0(" without Quigley et al. 2020 - juvenile survival\nCook's dist = ",round(cdist[cdist.i[2]],1))),
+		Parameter = names(coef(dat_sh.out2)), 
+		Estimate = coef(dat_sh.out2),
+		SE = dat_sh.out2$se),
+	data.frame(
+		Model = rep(paste0(" without Manzello et al. 2019 - adult bleaching\nCook's dist = ",round(cdist[cdist.i[3]],1))),
+		Parameter = names(coef(dat_sh.out3)), 
+		Estimate = coef(dat_sh.out3),
+		SE = dat_sh.out3$se),
+	data.frame(
+		Model = rep(paste0(" without Quigley et al. 2020 - juvenile bleaching\nCook's dist = ",round(cdist[cdist.i[4]],1))),
+		Parameter = names(coef(dat_sh.out4)), 
+		Estimate = coef(dat_sh.out4),
+		SE = dat_sh.out4$se),
+	data.frame(
+		Model = rep(paste0(" without Császár et al. 2010 - adult growth\nCook's dist = ",round(cdist[cdist.i[5]],1))),
+		Parameter = names(coef(dat_sh.out5)), 
+		Estimate = coef(dat_sh.out5),
+		SE = dat_sh.out5$se),
+	data.frame(
+		Model = rep(paste0("without estimates with Cook's distance > 5")),
+		Parameter = names(coef(dat_sh.out.all)), 
+		Estimate = coef(dat_sh.out.all),
+		SE = dat_sh.out.all$se)) %>%
+	mutate(Parameter = factor(Parameter),
+		   Parameter = fct_relevel(Parameter, "intrcpt")) %>%
+	ggplot(aes(x=Estimate, y=Parameter, color=Model)) +
+	geom_vline(xintercept=0, linetype="dashed") +
+	geom_pointrange(aes(xmin = Estimate - SE, xmax = Estimate + SE), position = position_dodge(width=0.3)) + 
+	labs(x="Parameter estimate (log[X+0.2] scale) ± SE") +
+	theme(legend.position="top", legend.direction="vertical")
+
+```
+
+
+#### Residuals and simulated data
+
+```{r}
+
+plot(fitted(final.model.B), rstandard(final.model.B)$z)
+abline(h=0, lty=2)
+plot(residuals(final.model.B, type="pearson"))
+abline(h=0, lty=2)
+# Not amazing, not terrible
+
+# Simulate new data given the parameter values of the data and same variance structure, plot on real data to see if it is similar
+xsim <- simulate(final.model.B, 100) %>%
+	mutate(true.val = dat_sh$val.log,
+		   weighting = 1/dat_sh$sv.log) %>%
+	pivot_longer(cols=-c(true.val, weighting)) %>%
+	select(name, true.val, sim.val = value, weighting)
+xsim %>%
+	ggplot(aes(x=true.val, y=sim.val)) +
+	geom_point(aes(col=weighting), alpha=0.05) +
+	geom_abline(slope=1, intercept=0, linetype="dashed") + 
+	scale_colour_viridis_c() +
+	scale_x_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
+	scale_y_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1))
+
+
+# reruns model, based around the same variance/covariance structures but with simulated data.
+xsim %>% 
+	ggplot(aes(y=weighting)) + 
+	geom_point(aes(x=sim.val), col="red", size=2, alpha=0.05) +
+	geom_point(data= filter(xsim, name == "sim_1"),
+			   aes(x=true.val),
+			   col="blue", size=2, alpha=0.9) +	
+	scale_x_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
+	labs(x="Heritability estimate", y=expression("Weighting (1/SE"^2*")"))
+
+# Seems that the model is in general simulating the true data ok!
+# Main problem is that values are simulating beyond the bounds of possible heritability.
+```
+
+------------------------------------------------------------------------
+
+## Part C: Sub-analysis of trait type x **growth form** interaction
+
+### Step 0: View 'complete' dataset
+
+For this analysis, note that there are only three estimates for
+encrusting species (*Montipora capitata*, *Montipora flabellate*,
+*Montipora patula*) and only a single estimate for columnar coral
+(*Porites evermanni*). Thus, we initially lumped these species into an 'Other' category, but quickly found that they lacked most of the trait and life stage combinations in order to be included in any analysis.
+
+```{r}
+dat_shg %>% table.plot("growth.form", "trait", .)
+dat_shg %>% table.plot("stage", "trait", .) # can also look at life stage interaction too
+dat_shg %>% table.plot("stage", "h2", .)
+dat_shg %>% table.plot("h2", "growth.form", .)
+```
+
+### Step 1: Define beyond optimal model
+
+The beyond-optimal model in this case is a full analysis of trait type x growth form + trait type x life stage, plus additive effects:
+$$ logit(h^2) \sim N(\mu, \tau^2) \\
+\mu = trait \times growth\,form + trait \times stage + h^2type + \epsilon_{i} $$
+
+### Step 2: Select optimal random effects
+
+```{r}
+# growth form without h2:
+m.study.nested <- rma.mv(yi=val.log ~ trait * growth.form + trait * stage + h2,
+						 V=sv.log, random = ~1|study/est.id,
+						 data=dat_shg, method="REML", tdist=T,
+						 sigma2 = c(NA, NA))
+m.spp.nested <- rma.mv(yi=val.log  ~ trait * growth.form + trait * stage + h2,
+						 V=sv.log, random = ~1|species/est.id,
+						 data=dat_shg, method="REML", tdist=T,
+						 sigma2 = c(NA, NA))
+m.only.est <- rma.mv(yi=val.log ~ trait * growth.form + trait * stage + h2,
+						 V=sv.log, random = ~1|study/est.id,
+						 data=dat_shg, method="REML", tdist=T,
+						 sigma2 = c(0, NA)) # same as random = ~1|est.id
+m.only.study <- rma.mv(yi=val.log ~ trait * growth.form + trait * stage + h2,
+					  V=sv.log, random = ~1|study/est.id,
+					  data=dat_shg, method="REML", tdist=T,
+					  sigma2 = c(NA, 0)) # same as random = ~1|study
+m.only.spp <- rma.mv(yi=val.log ~ trait * growth.form + trait * stage + h2,
+					  V=sv.log, random = ~1|species/est.id,
+					  data=dat_shg, method="REML", tdist=T,
+					  sigma2 = c(NA, 0)) # same as random = ~1|species
+m.no.reff <- rma.mv(yi=val.log ~ trait * growth.form + trait * stage + h2,
+					  V=sv.log, random = ~1|study/est.id,
+					  data=dat_shg, method="REML", tdist=T,
+					  sigma2 = c(0, 0)) # no random effects
+
+
+TableS7 <- myAIC(m.study.nested, m.spp.nested, m.only.est, m.only.study, m.only.spp, m.no.reff) %>%
+	mutate(model = fct_recode(model,
+		"Estimate ID nested in study ID" = "m.study.nested",
+		"Estimate ID nested in species" = "m.spp.nested",
+		"Study ID only" = "m.only.study",
+		"Species only" = "m.only.spp",
+		"Estimate ID only" = "m.only.est",
+		"No random effect" = "m.no.reff"))
+write.csv(TableS7, file="Suppl Tables/TableS7.csv", row.names=F)
+TableS7
+
+rm(m.study.nested, m.spp.nested, m.only.est, m.only.study, m.only.spp, m.no.reff)
+```
+
+Study ID only is preferred, estimate ID is close to optimal as well (ΔAIC=0.5), and null effects structure may also be preferred (ΔAIC=1.9). Continuing with study ID as the random effect...
+
+### Step 3: Select optimal fixed effects
+
+
+```{r}
+mod_names <- ls(pattern = "m.fixed.")
+do.call("rm", as.list(mod_names))
+
+m.fixed.txg.txs.h <- rma.mv(yi=val.log ~ trait*growth.form + trait*stage + h2,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.txg.txs <- rma.mv(yi=val.log ~ trait*growth.form + trait*stage,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+
+m.fixed.txg.s.h <- rma.mv(yi=val.log ~ trait*growth.form + stage + h2,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.txg.s <- rma.mv(yi=val.log ~ trait*growth.form + stage,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.txg.h <- rma.mv(yi=val.log ~ trait*growth.form + h2,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.txg <- rma.mv(yi=val.log ~ trait*growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+
+m.fixed.txs.h.g <- rma.mv(yi=val.log ~ trait*stage + h2 + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.txs.h <- rma.mv(yi=val.log ~ trait*stage + h2,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.txs.g <- rma.mv(yi=val.log ~ trait*stage + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.txs <- rma.mv(yi=val.log ~ trait*stage,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+
+m.fixed.t.s.h.g <- rma.mv(yi=val.log ~ trait + stage + h2 + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.t.s.h <- rma.mv(yi=val.log ~ trait + stage + h2,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.t.s.g <- rma.mv(yi=val.log ~ trait + stage + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.t.h.g <- rma.mv(yi=val.log ~ trait + h2 + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.s.h.g <- rma.mv(yi=val.log ~ stage + h2 + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+
+m.fixed.t.s <- rma.mv(yi=val.log ~ trait + stage,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.t.h <- rma.mv(yi=val.log ~ trait + h2,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.t.g <- rma.mv(yi=val.log ~ trait + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.s.h <- rma.mv(yi=val.log ~ stage + h2,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.s.g <- rma.mv(yi=val.log ~ stage + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.h.g <- rma.mv(yi=val.log ~ h2 + growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+
+
+m.fixed.t <- rma.mv(yi=val.log ~ trait,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.s <- rma.mv(yi=val.log ~ stage,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.h <- rma.mv(yi=val.log ~ h2,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.g <- rma.mv(yi=val.log ~ growth.form,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+m.fixed.null <- rma.mv(yi=val.log ~ 1,
+							V=sv.log, random = ~1|study/est.id, data=dat_shg,
+							method="ML", tdist=T, sigma2 = c(NA, 0))
+
+
+mod_names <- ls(pattern = "m.fixed.")
+TableS8 <- head(do.call("myAIC", as.list(c(mod_names, getmodel=T)))) %>%
+	mutate(model = fct_recode(model,
+		"trait x life stage" = "m.fixed.txs",
+		"trait x life stage + heritability type" = "m.fixed.txs.h",
+		"trait x life stage + trait x growth form + heritability type" = "m.fixed.txg.txs.h",
+		"trait x life stage + trait x growth form" = "m.fixed.txg.txs",
+		"trait x life stage + growth form" = "m.fixed.txs.g",
+		"trait x life stage + heritability type + growth form" = "m.fixed.txs.h.g"))
+write.csv(TableS8, file="Suppl Tables/TableS8.csv", row.names=F)
+TableS8
+
+```
+
+### Step 4: Fit final model
+
+```{r}
+final.model.C <- rma.mv(yi=val.log ~ trait*stage, 
+					  V=sv.log, random = ~1|study/est.id,
+					  data=dat_shg, method="REML", tdist=T, sigma2 = c(NA, 0))
+final.model.C
+save(final.model.C, file="Models/final.model.C.Rdata")
+
+mlm.variance.distribution(final.model.C)
+final.model.C$k - final.model.C$p
+```
+
+
+A final fixed effect structure of ~trait type x life stage + heritability type (for estimate-ID only random effect) or ~trait type x life stage (for study-ID only random effect).
+
+
+### Step 5: Check final model diagnostics
+
+#### Funnel plot
+
+```{r}
+
+x <- resid(final.model.C)
+hist(x) # looks approx. normal, except for one strong outlier at -1.5
+
+par(mfrow=c(2,1))
+funnel(final.model.C)
+funnel(final.model.C, yaxis = "vinv")
+par(mfrow=c(1,1))
+
+dat_shg[x < -1,] %>% select(study, species, trait, stage, h2, val)
+
+update(final.model.C, .~., data=dat_shg[x > -1,]) %>%
+	funnel() # Funnel looks good once that one point is removed!
+```
+
+#### Fail-safe number  Cook's distance
+
+```{r}
+
+fsn(yi=val.log, vi=sv.log, data=dat_shg, type="Rosenberg") # N=513 to get no significance (but assumes fixed effects)
+# Number of studies x5 + 10:
+length(unique(dat_shg$study))*5 + 10
+
+
+cdist <- cooks.distance(final.model.C, reestimate=FALSE)
+plot(cdist)
+cdist.i <- which(cdist >2)
+points(cdist.i, cdist[cdist.i], col="red", pch=16)
+dat_shg[cdist.i,] %>% select(study, trait, stage, h2, val) %>% mutate(cdist = cdist[cdist.i])
+update(final.model.C, .~., data=dat_shg[-cdist.i[3],])
+
+# dat_shg %>% table.plot("stage", "trait", .) 
+
+```
+
+Plot the coefficients with different model datasets:
+```{r}
+dat_shg.out1 <- update(final.model.C, .~., data=dat_shg[-cdist.i[1],])
+dat_shg.out2 <- update(final.model.C, .~., data=dat_shg[-cdist.i[2],])
+dat_shg.out3 <- update(final.model.C, .~., data=dat_shg[-cdist.i[3],])
+dat_shg.out4 <- update(final.model.C, .~., data=dat_shg[-cdist.i[4],])
+dat_shg.out5 <- update(final.model.C, .~., data=dat_shg[-cdist.i[5],])
+dat_shg.out.all <- update(final.model.C, .~., data=dat_shg[-cdist.i[c(1,2,3,5)],])
+
+
+rbind(
+	data.frame(
+		Model = rep(" Original model fit"),
+		Parameter = names(coef(final.model.C)), 
+		Estimate = coef(final.model.C),
+		SE = final.model.C$se),
+	data.frame(
+		Model = rep(paste0(" without Kenkel et al. 2015 - juvenile survival\nCook's dist = ",round(cdist[cdist.i[1]],1))),
+		Parameter = names(coef(dat_shg.out1)), 
+		Estimate = coef(dat_shg.out1),
+		SE = dat_shg.out1$se),
+	data.frame(
+		Model = rep(paste0(" without Quigley et al. 2020 - juvenile survival\nCook's dist = ",round(cdist[cdist.i[2]],1))),
+		Parameter = names(coef(dat_shg.out2)), 
+		Estimate = coef(dat_shg.out2),
+		SE = dat_shg.out2$se),
+	data.frame(
+		Model = rep(paste0(" without Manzello et al. 2019 - adult bleaching\nCook's dist = ",round(cdist[cdist.i[3]],1))),
+		Parameter = names(coef(dat_shg.out3)), 
+		Estimate = coef(dat_shg.out3),
+		SE = dat_shg.out3$se),
+	data.frame(
+		Model = rep(paste0(" without Quigley et al. 2020 - juvenile bleaching\nCook's dist = ",round(cdist[cdist.i[4]],1))),
+		Parameter = names(coef(dat_shg.out4)), 
+		Estimate = coef(dat_shg.out4),
+		SE = dat_shg.out4$se),
+	data.frame(
+		Model = rep(paste0(" without Császár et al. 2010 - adult growth\nCook's dist = ",round(cdist[cdist.i[5]],1))),
+		Parameter = names(coef(dat_shg.out5)), 
+		Estimate = coef(dat_shg.out5),
+		SE = dat_shg.out5$se),
+	data.frame(
+		Model = rep(paste0("without estimates with Cook's distance > 5")),
+		Parameter = names(coef(dat_shg.out.all)), 
+		Estimate = coef(dat_shg.out.all),
+		SE = dat_shg.out.all$se)) %>%
+	mutate(Parameter = factor(Parameter),
+		   Parameter = fct_relevel(Parameter, "intrcpt")) %>%
+	ggplot(aes(x=Estimate, y=Parameter, color=Model)) +
+	geom_vline(xintercept=0, linetype="dashed") +
+	geom_pointrange(aes(xmin = Estimate - SE, xmax = Estimate + SE), position = position_dodge(width=0.3)) + 
+	labs(x="Parameter estimate (log[X+0.2] scale) ± SE") +
+	theme(legend.position="top", legend.direction="vertical")
+
+```
+
+
+#### Residuals and simulated data
+
+```{r}
+
+plot(fitted(final.model.C), rstandard(final.model.C)$z)
+abline(h=0, lty=2)
+plot(residuals(final.model.C, type="pearson"))
+abline(h=0, lty=2)
+# Not amazing, not terrible
+
+# Simulate new data given the parameter values of the data and same variance structure, plot on real data to see if it is similar
+xsim <- simulate(final.model.C, 100) %>%
+	mutate(true.val = dat_shg$val.log,
+		   weighting = 1/dat_shg$sv.log) %>%
+	pivot_longer(cols=-c(true.val, weighting)) %>%
+	select(name, true.val, sim.val = value, weighting)
+xsim %>%
+	ggplot(aes(x=true.val, y=sim.val)) +
+	geom_point(aes(col=weighting), alpha=0.05) +
+	geom_abline(slope=1, intercept=0, linetype="dashed") + 
+	scale_colour_viridis_c() +
+	scale_x_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
+	scale_y_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1))
+
+
+# reruns model, based around the same variance/covariance structures but with simulated data.
+xsim %>% 
+	ggplot(aes(y=weighting)) + 
+	geom_point(aes(x=sim.val), col="red", size=2, alpha=0.05) +
+	geom_point(data= filter(xsim, name == "sim_1"),
+			   aes(x=true.val),
+			   col="blue", size=2, alpha=0.9) +	
+	scale_x_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
+	labs(x="Heritability estimate", y=expression("Weighting (1/SE"^2*")"))
+
+# Seems that the model is in general simulating the true data ok!
+# Main problem is that values are simulating beyond the bounds of possible heritability.
+```
+
+
+<!-- ```{r, eval=F, include=F} -->
+<!-- # How to do post-hoc tests -->
+<!-- final.model.C <- rma(yi=val.log ~ trait*stage + growth.form,  -->
+<!-- 					 vi=sv.log, data=dat_shg, method="REML", test="knha") -->
+<!-- summary(final.model.C) -->
+
+<!-- # Get contrasts:  -->
+<!-- cont.mat <- rbind(c(0,0,0,0,0,0,0,0, 1,0, 0,0,0,0,0), # corymb vs. branch -->
+<!-- 				  c(0,0,0,0,0,0,0,0, 0,1, 0,0,0,0,0), # corymb vs. mass -->
+<!-- 				  c(0,0,0,0,0,0,0,0, 1,-1,0,0,0,0,0)) # branch vs. mass -->
+<!-- # anova(final.model.D, L=cont.mat) # unadjusted -->
+<!-- summary(multcomp::glht(final.model.C, -->
+<!-- 					   linfct=cont.mat,  -->
+<!-- 					   test=Ftest())) -->
+<!-- 					   # test = chisq())) -->
+<!-- 					   # test=adjusted("none"))) -->
+<!-- ``` -->
+
+------------------------------------------------------------------------
+
+## Part D-i: Sub-analysis of trait type x **temperature differential**
+
+### Step 0: View 'complete' dataset
+
+```{r}
+dat_tm %>% pull(temp.diff) %>% hist() # some high values, use a sqrt-transform to make more normally distributed!
+dat_tm %>% pull(temp.diff) %>% sqrt() %>% hist() # better!
+
+dat_tm %>% table.plot("stage", "trait", .) # no other interactions possible!
+dat_tm %>% table.plot("h2", "trait", .) # no other interactions possible!
+dat_tm %>% table.plot("growth.form", "trait", .) # no other interactions
+
+# Life stage, heritability type, and growth form are all signular for the photochemistry and immune response categories (all entirely overlapping for these trait types)
+
+```
+
+
+### Step 1: Define beyond optimal model
+
+Beyond optimal is simply trait x temp differential:
+this sub-analysis. $$ logit(h^2) \sim N(\mu, \tau^2) \\
+\mu = trait_k \times sqrt(temp\;diff) + stage + h^2type + growth\;form \,  + \, \epsilon_{i} $$
+
+### Step 2: Select optimal random effects
+
+```{r}
+
+m.study.nested <- rma.mv(yi=val.log ~ trait*temp.s + stage + h2 + growth.form,
+						 V=sv.log, random = ~1|study/est.id, 
+						 data=dat_tm, method="REML", tdist=T,
+						 sigma2 = c(NA, NA))
+m.spp.nested <- rma.mv(yi=val.log ~ trait*temp.s + stage + h2 + growth.form,
+						 V=sv.log, random = ~1|species/est.id, 
+						 data=dat_tm, method="REML", tdist=T,
+						 sigma2 = c(NA, NA))
+m.only.est <- rma.mv(yi=val.log ~ trait*temp.s + stage + h2 + growth.form,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=dat_tm, method="REML", tdist=T,
+					  sigma2 = c(0, NA)) # same as random = ~1|est.id
+m.only.study <- rma.mv(yi=val.log ~ trait*temp.s + stage + h2 + growth.form,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=dat_tm, method="REML", tdist=T,
+					  sigma2 = c(NA, 0)) # same as random = ~1|study
+m.only.spp <- rma.mv(yi=val.log ~ trait*temp.s + stage + h2 + growth.form,
+					  V=sv.log, random = ~1|species/est.id, 
+					  data=dat_tm, method="REML", tdist=T,
+					  sigma2 = c(NA, 0)) # same as random = ~1|species
+m.no.reff <- rma.mv(yi=val.log ~ trait*temp.s + stage + h2 + growth.form,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=dat_tm, method="REML", tdist=T,
+					  sigma2 = c(0, 0)) # no random effects
+
+
+TableS9 <- myAIC(m.study.nested, m.spp.nested, m.only.est, m.only.study, m.only.spp, m.no.reff) %>%
+	mutate(model = fct_recode(model,
+		"Estimate ID nested in study ID" = "m.study.nested",
+		"Estimate ID nested in species" = "m.spp.nested",
+		"Study ID only" = "m.only.study",
+		"Species only" = "m.only.spp",
+		"Estimate ID only" = "m.only.est",
+		"No random effect" = "m.no.reff"))
+write.csv(TableS9, file="Suppl Tables/TableS9.csv", row.names=F)
+TableS9
+
+rm(m.study.nested, m.spp.nested, m.only.est, m.only.study, m.only.spp, m.no.reff)
+
+```
+
+The nested estimate ID within study ID random effects structure is preferred.
+The next closest is estimate ID-only, with ΔAICc = 3.69.
+
+### Step 3: Select optimal fixed effects
+
+```{r}
+mod_names <- ls(pattern = "m.fixed.")
+do.call("rm", as.list(mod_names))
+
+m.fixed.txm.s.h.g <- 
+	rma.mv(yi=val.log ~ trait*temp.s + stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.txm.s.h <- 
+	rma.mv(yi=val.log ~ trait*temp.s + stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.txm.s.g <- 
+	rma.mv(yi=val.log ~ trait*temp.s + stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.txm.h.g <- 
+	rma.mv(yi=val.log ~ trait*temp.s + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.txm.s <- 
+	rma.mv(yi=val.log ~ trait*temp.s + stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.txm.h <- 
+	rma.mv(yi=val.log ~ trait*temp.s + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.txm.g <- 
+	rma.mv(yi=val.log ~ trait*temp.s + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.txm <- 
+	rma.mv(yi=val.log ~ trait*temp.s,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+
+
+m.fixed.t.m.s.h.g <- 
+	rma.mv(yi=val.log ~ trait + temp.s + stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.m.s.h <- 
+	rma.mv(yi=val.log ~ trait + temp.s + stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.m.s.g <- 
+	rma.mv(yi=val.log ~ trait + temp.s + stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.m.h.g <- 
+	rma.mv(yi=val.log ~ trait + temp.s + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.s.h.g <- 
+	rma.mv(yi=val.log ~ trait + stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.m.s.h.g <- 
+	rma.mv(yi=val.log ~ temp.s + stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+
+m.fixed.t.m.s <- 
+	rma.mv(yi=val.log ~ trait + temp.s + stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.m.h <- 
+	rma.mv(yi=val.log ~ trait + temp.s + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.m.g <- 
+	rma.mv(yi=val.log ~ trait + temp.s + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.s.h <- 
+	rma.mv(yi=val.log ~ trait + stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.s.g <- 
+	rma.mv(yi=val.log ~ trait + stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.h.g <- 
+	rma.mv(yi=val.log ~ trait + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+m.fixed.m.s.h <- 
+	rma.mv(yi=val.log ~ temp.s + stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.m.s.g <- 
+	rma.mv(yi=val.log ~ temp.s + stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.m.h.g <- 
+	rma.mv(yi=val.log ~ temp.s + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.s.h.g <- 
+	rma.mv(yi=val.log ~ stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+m.fixed.t.m <- 
+	rma.mv(yi=val.log ~ trait + temp.s,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.s <- 
+	rma.mv(yi=val.log ~ trait + stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.h <- 
+	rma.mv(yi=val.log ~ trait + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.g <- 
+	rma.mv(yi=val.log ~ trait + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+m.fixed.m.s <- 
+	rma.mv(yi=val.log ~ temp.s + stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.m.h <- 
+	rma.mv(yi=val.log ~ temp.s + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.m.g <- 
+	rma.mv(yi=val.log ~ temp.s + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+m.fixed.s.h <- 
+	rma.mv(yi=val.log ~ stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.s.g <- 
+	rma.mv(yi=val.log ~ stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.h.g <- 
+	rma.mv(yi=val.log ~ h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+
+m.fixed.t <- 
+	rma.mv(yi=val.log ~ trait,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.m <- 
+	rma.mv(yi=val.log ~ temp.s,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.s <- 
+	rma.mv(yi=val.log ~ stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.h <- 
+	rma.mv(yi=val.log ~ h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.g <- 
+	rma.mv(yi=val.log ~ growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+m.fixed.null <- 
+	rma.mv(yi=val.log ~ 1,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+mod_names <- ls(pattern = "m.fixed.")
+TableS10 <- head(do.call("myAIC", as.list(c(mod_names, getmodel=T)))) %>%
+	mutate(model = fct_recode(model,
+		"trait + heritability type" = "m.fixed.t.h",
+		"trait" = "m.fixed.t",
+		"trait x temp diff" = "m.fixed.txm",
+		"trait + heritability type + temp diff" = "m.fixed.t.m.h",
+		"trait + temp diff" = "m.fixed.t.m",
+		"trait x temp diff + heritability type" = "m.fixed.txm.h"))
+write.csv(TableS10, file="Suppl Tables/TableS10.csv", row.names=F)
+TableS10
+```
+
+### Step 4: Fit final model and alternative model including temperature
+
+```{r}
+final.model.Di <- rma.mv(yi=val.log ~ trait + h2, 
+					  V=sv.log, random = ~1|study/est.id,
+					  data=dat_tm, method="REML", tdist=T, sigma2 = c(NA, NA))
+final.model.Di
+save(final.model.Di, file="Models/final.model.Di.Rdata")
+
+mlm.variance.distribution(final.model.Di)
+final.model.Di$k - final.model.Di$p
+
+# Temp x trait type model:
+tempxtrait.model <- rma.mv(yi=val.log ~ trait * temp.s, 
+					  V=sv.log, random = ~1|study/est.id,
+					  data=dat_tm, method="REML", tdist=T, sigma2 = c(NA, NA))
+tempxtrait.model
+# save(tempxtrait.model, file="Models/final.model.Di.Rdata")
+
+mlm.variance.distribution(tempxtrait.model)
+tempxtrait.model$k - tempxtrait.model$p
+
+```
+
+
+### Step 5: Check final model diagnostics (for alternative model)
+
+#### Funnel plot
+
+```{r}
+
+x <- resid(tempxtrait.model)
+hist(x) # looks approx. normal, except for one strong outlier at -1.5
+
+par(mfrow=c(2,1))
+funnel(tempxtrait.model)
+update(tempxtrait.model, .~., data=dat_tm[x!=0,]) %>%
+	funnel(., yaxis="vinv")
+par(mfrow=c(1,1))
+
+```
+
+#### Fail-safe number
+
+```{r}
+
+fsn(yi=val.log, vi=sv.log, data=dat_tm, type="Rosenberg") # N=1669 to get no significance (but assumes fixed effects)
+# Number of studies x5 + 10:
+length(unique(dat_tm$study))*5 + 10 # 1669 >> 70
+```
+
+
+#### Cook's distance
+
+```{r}
+cdist <- cooks.distance(tempxtrait.model, reestimate=FALSE)
+plot(cdist)
+cdist.i <- which(cdist >2)
+points(cdist.i, cdist[cdist.i], col="red", pch=16)
+data[cdist.i,] %>% select(study, species, val, trait, stage, h2) %>%
+	cbind(., cooks = round(cdist[cdist.i], 2))
+update(tempxtrait.model, .~., data=dat_tm[-cdist.i,]) # effect of juv:growth n.s.
+update(tempxtrait.model, .~., data=dat_tm[-cdist.i[1],]) # no real difference
+update(tempxtrait.model, .~., data=dat_tm[-cdist.i[2],]) # no real difference
+```
+
+#### Residuals and simulated data
+
+```{r}
+
+plot(fitted(tempxtrait.model), rstandard(tempxtrait.model)$z)
+abline(h=0, lty=2)
+plot(residuals(tempxtrait.model, type="pearson"))
+abline(h=0, lty=2)
+# Not amazing, not terrible
+
+# Simulate new data given the parameter values of the data and same variance structure, plot on real data to see if it is similar
+xsim <- simulate(tempxtrait.model, 100) %>%
+	mutate(true.val = dat_tm$val.log,
+		   weighting = 1/dat_tm$sv.log) %>%
+	pivot_longer(cols=-c(true.val, weighting)) %>%
+	select(name, true.val, sim.val = value, weighting)
+xsim %>%
+	ggplot(aes(x=true.val, y=sim.val)) +
+	geom_point(aes(col=weighting), alpha=0.05) +
+	geom_abline(slope=1, intercept=0, linetype="dashed") + 
+	scale_colour_viridis_c() +
+	scale_x_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
+	scale_y_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1))
+
+
+# reruns model, based around the same variance/covariance structures but with simulated data.
+xsim %>% 
+	ggplot(aes(y=weighting)) + 
+	geom_point(aes(x=sim.val), col="red", size=2, alpha=0.05) +
+	geom_point(data= filter(xsim, name == "sim_1"),
+			   aes(x=true.val),
+			   col="blue", size=2, alpha=0.9) +	
+	scale_x_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
+	labs(x="Heritability estimate", y=expression("Weighting (1/SE"^2*")"))
+
+```
+
+------------------------------------------------------------------------
+
+
+## Part D-ii: Sub-analysis of trait type x **binary temperature manipulation**
+
+### Step 0: View 'complete' dataset
+
+```{r}
+dat_tm %>% table.plot("temp.manip", "trait", .)
+dat_tm %>% table.plot("temp.manip", "stage", .) # life stage x temp.manip possible
+dat_tm %>% table.plot("temp.manip", "h2", .) # h2 x temp.manip
+dat_tm %>% table.plot("temp.manip", "growth.form", .) # not possible for encrusting, columnar, remove!
+
+
+dat_tm %>% table.plot("stage", "trait", .) # no other interactions possible!
+dat_tm %>% table.plot("h2", "trait", .) # no other interactions possible!
+dat_tm %>% table.plot("growth.form", "trait", .) # no other interactions
+
+# Life stage, heritability type, and growth form are all signular for the photochemistry and immune response categories (all entirely overlapping for these trait types)
+
+
+```
+
+
+### Step 1: Define beyond optimal model
+
+Beyond optimal is simply trait x temp manipulation or temp magnitude for
+this sub-analysis. $$ logit(h^2) \sim N(\mu, \tau^2) \\
+\mu = trait_k \times temp\;manip + stage + h^2type + growth\;form \,  + \, \epsilon_{i} $$
+
+### Step 2: Select optimal random effects
+
+```{r}
+## Compare random effects (fixed effects included)
+# dat_tm <- dat_tm %>% filter(!(growth.form %in%  c("columnar", "encrusting"))) %>%
+# 	mutate(growth.form = factor(growth.form))
+
+m.study.nested <- rma.mv(yi=val.log ~ trait*temp.manip + stage + h2 + growth.form,
+						 V=sv.log, random = ~1|study/est.id, 
+						 data=dat_tm, method="REML", tdist=T,
+						 sigma2 = c(NA, NA))
+m.spp.nested <- rma.mv(yi=val.log ~ trait*temp.manip + stage + h2 + growth.form,
+						 V=sv.log, random = ~1|species/est.id, 
+						 data=dat_tm, method="REML", tdist=T,
+						 sigma2 = c(NA, NA))
+m.only.est <- rma.mv(yi=val.log ~ trait*temp.manip + stage + h2 + growth.form,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=dat_tm, method="REML", tdist=T,
+					  sigma2 = c(0, NA)) # same as random = ~1|est.id
+m.only.study <- rma.mv(yi=val.log ~ trait*temp.manip + stage + h2 + growth.form,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=dat_tm, method="REML", tdist=T,
+					  sigma2 = c(NA, 0)) # same as random = ~1|study
+m.only.spp <- rma.mv(yi=val.log ~ trait*temp.manip + stage + h2 + growth.form,
+					  V=sv.log, random = ~1|species/est.id, 
+					  data=dat_tm, method="REML", tdist=T,
+					  sigma2 = c(NA, 0)) # same as random = ~1|species
+m.no.reff <- rma.mv(yi=val.log ~ trait*temp.manip + stage + h2 + growth.form,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=dat_tm, method="REML", tdist=T,
+					  sigma2 = c(0, 0)) # no random effects
+
+
+TableS11 <- myAIC(m.study.nested, m.spp.nested, m.only.est, m.only.study, m.only.spp, m.no.reff) %>%
+	mutate(model = fct_recode(model,
+		"Estimate ID nested in study ID" = "m.study.nested",
+		"Estimate ID nested in species" = "m.spp.nested",
+		"Study ID only" = "m.only.study",
+		"Species only" = "m.only.spp",
+		"Estimate ID only" = "m.only.est",
+		"No random effect" = "m.no.reff"))
+write.csv(TableS11, file="Suppl Tables/TableS11.csv", row.names=F)
+TableS11
+
+rm(m.study.nested, m.spp.nested, m.only.est, m.only.study, m.only.spp, m.no.reff)
+
+```
+
+The nested estimate ID within study ID random effects structure is preferred.
+The next closest is estimate ID-only, with ΔAICc = 1.66.
+
+### Step 3: Select optimal fixed effects
+
+```{r}
+mod_names <- ls(pattern = "m.fixed.")
+do.call("rm", as.list(mod_names))
+
+m.fixed.txm.s.h.g <- 
+	rma.mv(yi=val.log ~ trait*temp.manip + stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.txm.s.h <- 
+	rma.mv(yi=val.log ~ trait*temp.manip + stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.txm.s.g <- 
+	rma.mv(yi=val.log ~ trait*temp.manip + stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.txm.h.g <- 
+	rma.mv(yi=val.log ~ trait*temp.manip + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.txm.s <- 
+	rma.mv(yi=val.log ~ trait*temp.manip + stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.txm.h <- 
+	rma.mv(yi=val.log ~ trait*temp.manip + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.txm.g <- 
+	rma.mv(yi=val.log ~ trait*temp.manip + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.txm <- 
+	rma.mv(yi=val.log ~ trait*temp.manip,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+
+
+m.fixed.t.m.s.h.g <- 
+	rma.mv(yi=val.log ~ trait + temp.manip + stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.m.s.h <- 
+	rma.mv(yi=val.log ~ trait + temp.manip + stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.m.s.g <- 
+	rma.mv(yi=val.log ~ trait + temp.manip + stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.m.h.g <- 
+	rma.mv(yi=val.log ~ trait + temp.manip + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.s.h.g <- 
+	rma.mv(yi=val.log ~ trait + stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.m.s.h.g <- 
+	rma.mv(yi=val.log ~ temp.manip + stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+
+m.fixed.t.m.s <- 
+	rma.mv(yi=val.log ~ trait + temp.manip + stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.m.h <- 
+	rma.mv(yi=val.log ~ trait + temp.manip + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.m.g <- 
+	rma.mv(yi=val.log ~ trait + temp.manip + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.s.h <- 
+	rma.mv(yi=val.log ~ trait + stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.s.g <- 
+	rma.mv(yi=val.log ~ trait + stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.h.g <- 
+	rma.mv(yi=val.log ~ trait + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+m.fixed.m.s.h <- 
+	rma.mv(yi=val.log ~ temp.manip + stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.m.s.g <- 
+	rma.mv(yi=val.log ~ temp.manip + stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.m.h.g <- 
+	rma.mv(yi=val.log ~ temp.manip + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.s.h.g <- 
+	rma.mv(yi=val.log ~ stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+m.fixed.t.m <- 
+	rma.mv(yi=val.log ~ trait + temp.manip,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.s <- 
+	rma.mv(yi=val.log ~ trait + stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.h <- 
+	rma.mv(yi=val.log ~ trait + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.t.g <- 
+	rma.mv(yi=val.log ~ trait + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+m.fixed.m.s <- 
+	rma.mv(yi=val.log ~ temp.manip + stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.m.h <- 
+	rma.mv(yi=val.log ~ temp.manip + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.m.g <- 
+	rma.mv(yi=val.log ~ temp.manip + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+m.fixed.s.h <- 
+	rma.mv(yi=val.log ~ stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.s.g <- 
+	rma.mv(yi=val.log ~ stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.h.g <- 
+	rma.mv(yi=val.log ~ h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+
+m.fixed.t <- 
+	rma.mv(yi=val.log ~ trait,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.m <- 
+	rma.mv(yi=val.log ~ temp.manip,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.s <- 
+	rma.mv(yi=val.log ~ stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.h <- 
+	rma.mv(yi=val.log ~ h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+m.fixed.g <- 
+	rma.mv(yi=val.log ~ growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+m.fixed.null <- 
+	rma.mv(yi=val.log ~ 1,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm, method="ML",
+		   tdist=T, sigma = c(NA, NA))
+
+mod_names <- ls(pattern = "m.fixed.")
+TableS12 <- head(do.call("myAIC", as.list(c(mod_names, getmodel=T)))) %>%
+	mutate(model = fct_recode(model,
+		"trait + heritability type" = "m.fixed.t.h",
+		"trait" = "m.fixed.t",
+		"trait + heritability type + temp manip" = "m.fixed.t.m.h",
+		"trait + temp manip" = "m.fixed.t.m",
+		"trait x temp manip" = "m.fixed.txm",
+		"trait + life stage" = "m.fixed.t.s"))
+write.csv(TableS12, file="Suppl Tables/TableS12.csv", row.names=F)
+TableS12
+
+```
+
+A model of trait type + heritability type is preferred, though a model of trait (ΔAIC=0.5) and trait x temperature difference (ΔAIC=1.9) are also close.
+
+### Step 4: Fit final model
+
+```{r}
+final.model.Dii <- rma.mv(yi=val.log ~ trait + h2, 
+					  V=sv.log, random = ~1|study/est.id,
+					  data=dat_tm, method="REML", tdist=T, sigma2 = c(NA, NA))
+final.model.Dii
+save(final.model.Dii, file="Models/final.model.Dii.Rdata")
+
+mlm.variance.distribution(final.model.Dii)
+final.model.Dii$k - final.model.Dii$p
+```
+
+
+
+------------------------------------------------------------------------
+
+## Part D-iii: Sub-analysis of trait type x **temperature differential, with only non-zero values**
+
+### Step 0: View 'complete' dataset
+
+```{r}
+dat_tm_nz <- dat_tm %>% filter(temp.diff >0) %>%
+	mutate(trait = factor(trait), 
+		   stage = factor(stage), 
+		   h2 = factor(h2),
+		   growth.form = factor(growth.form))
+dat_tm_nz %>% pull(temp.diff) %>% hist() # some high values, use a sqrt-transform to make more normally distributed!
+dat_tm_nz %>% pull(temp.diff) %>% sqrt() %>% hist() # better!
+
+dat_tm_nz %>% table.plot("stage", "trait", .) # no other interactions possible!
+dat_tm_nz %>% table.plot("h2", "trait", .) # no other interactions possible!
+dat_tm_nz %>% table.plot("growth.form", "trait", .) # no other interactions
+
+# Life stage, heritability type, and growth form are all singular for the photochemistry and immune response categories (all entirely overlapping for these trait types)
+
+```
+
+
+### Step 1: Define beyond optimal model
+
+Beyond optimal is simply trait x temp differential:
+this sub-analysis. $$ logit(h^2) \sim N(\mu, \tau^2) \\
+\mu = trait_k \times sqrt(temp\;diff) + stage + h^2type + growth\;form \,  + \, \epsilon_{i} $$
+
+### Step 2: Select optimal random effects
+
+```{r}
+
+m.study.nested <- rma.mv(yi=val.log ~ trait*temp.s + stage + h2 + growth.form,
+						 V=sv.log, random = ~1|study/est.id, 
+						 data=dat_tm_nz, method="REML", tdist=T,
+						 sigma2 = c(NA, NA))
+m.spp.nested <- rma.mv(yi=val.log ~ trait*temp.s + stage + h2 + growth.form,
+						 V=sv.log, random = ~1|species/est.id, 
+						 data=dat_tm_nz, method="REML", tdist=T,
+						 sigma2 = c(NA, NA))
+m.only.est <- rma.mv(yi=val.log ~ trait*temp.s + stage + h2 + growth.form,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=dat_tm_nz, method="REML", tdist=T,
+					  sigma2 = c(0, NA)) # same as random = ~1|est.id
+m.only.study <- rma.mv(yi=val.log ~ trait*temp.s + stage + h2 + growth.form,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=dat_tm_nz, method="REML", tdist=T,
+					  sigma2 = c(NA, 0)) # same as random = ~1|study
+m.only.spp <- rma.mv(yi=val.log ~ trait*temp.s + stage + h2 + growth.form,
+					  V=sv.log, random = ~1|species/est.id, 
+					  data=dat_tm_nz, method="REML", tdist=T,
+					  sigma2 = c(NA, 0)) # same as random = ~1|species
+m.no.reff <- rma.mv(yi=val.log ~ trait*temp.s + stage + h2 + growth.form,
+					  V=sv.log, random = ~1|study/est.id, 
+					  data=dat_tm_nz, method="REML", tdist=T,
+					  sigma2 = c(0, 0)) # no random effects
+
+
+TableS13 <- myAIC(m.study.nested, m.spp.nested, m.only.est, m.only.study, m.only.spp, m.no.reff) %>%
+	mutate(model = fct_recode(model,
+		"Estimate ID nested in study ID" = "m.study.nested",
+		"Estimate ID nested in species" = "m.spp.nested",
+		"Study ID only" = "m.only.study",
+		"Species only" = "m.only.spp",
+		"Estimate ID only" = "m.only.est",
+		"No random effect" = "m.no.reff"))
+write.csv(TableS13, file="Suppl Tables/TableS13.csv", row.names=F)
+TableS13
+
+rm(m.study.nested, m.spp.nested, m.only.est, m.only.study, m.only.spp, m.no.reff)
+
+```
+
+The estimate ID-only random effects structure is preferred.
+The next closest is estimate ID-only, with ΔAICc = 10.6.
+
+### Step 3: Select optimal fixed effects
+
+```{r}
+mod_names <- ls(pattern = "m.fixed.")
+do.call("rm", as.list(mod_names))
+
+m.fixed.txm.s.h.g <- 
+	rma.mv(yi=val.log ~ trait*temp.s + stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.txm.s.h <- 
+	rma.mv(yi=val.log ~ trait*temp.s + stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.txm.s.g <- 
+	rma.mv(yi=val.log ~ trait*temp.s + stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.txm.h.g <- 
+	rma.mv(yi=val.log ~ trait*temp.s + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.txm.s <- 
+	rma.mv(yi=val.log ~ trait*temp.s + stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.txm.h <- 
+	rma.mv(yi=val.log ~ trait*temp.s + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.txm.g <- 
+	rma.mv(yi=val.log ~ trait*temp.s + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.txm <- 
+	rma.mv(yi=val.log ~ trait*temp.s,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+
+
+
+m.fixed.t.m.s.h.g <- 
+	rma.mv(yi=val.log ~ trait + temp.s + stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.t.m.s.h <- 
+	rma.mv(yi=val.log ~ trait + temp.s + stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.t.m.s.g <- 
+	rma.mv(yi=val.log ~ trait + temp.s + stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.t.m.h.g <- 
+	rma.mv(yi=val.log ~ trait + temp.s + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.t.s.h.g <- 
+	rma.mv(yi=val.log ~ trait + stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.m.s.h.g <- 
+	rma.mv(yi=val.log ~ temp.s + stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+
+
+m.fixed.t.m.s <- 
+	rma.mv(yi=val.log ~ trait + temp.s + stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.t.m.h <- 
+	rma.mv(yi=val.log ~ trait + temp.s + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.t.m.g <- 
+	rma.mv(yi=val.log ~ trait + temp.s + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.t.s.h <- 
+	rma.mv(yi=val.log ~ trait + stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.t.s.g <- 
+	rma.mv(yi=val.log ~ trait + stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.t.h.g <- 
+	rma.mv(yi=val.log ~ trait + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+
+m.fixed.m.s.h <- 
+	rma.mv(yi=val.log ~ temp.s + stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.m.s.g <- 
+	rma.mv(yi=val.log ~ temp.s + stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.m.h.g <- 
+	rma.mv(yi=val.log ~ temp.s + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.s.h.g <- 
+	rma.mv(yi=val.log ~ stage + h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+
+m.fixed.t.m <- 
+	rma.mv(yi=val.log ~ trait + temp.s,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.t.s <- 
+	rma.mv(yi=val.log ~ trait + stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.t.h <- 
+	rma.mv(yi=val.log ~ trait + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.t.g <- 
+	rma.mv(yi=val.log ~ trait + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+
+m.fixed.m.s <- 
+	rma.mv(yi=val.log ~ temp.s + stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.m.h <- 
+	rma.mv(yi=val.log ~ temp.s + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.m.g <- 
+	rma.mv(yi=val.log ~ temp.s + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+
+m.fixed.s.h <- 
+	rma.mv(yi=val.log ~ stage + h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.s.g <- 
+	rma.mv(yi=val.log ~ stage + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.h.g <- 
+	rma.mv(yi=val.log ~ h2 + growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+
+
+m.fixed.t <- 
+	rma.mv(yi=val.log ~ trait,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.m <- 
+	rma.mv(yi=val.log ~ temp.s,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.s <- 
+	rma.mv(yi=val.log ~ stage,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.h <- 
+	rma.mv(yi=val.log ~ h2,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+m.fixed.g <- 
+	rma.mv(yi=val.log ~ growth.form,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+
+m.fixed.null <- 
+	rma.mv(yi=val.log ~ 1,
+		   V=sv.log, random = ~1|study/est.id, data=dat_tm_nz, method="ML",
+		   tdist=T, sigma =c(0, NA))
+
+mod_names <- ls(pattern = "m.fixed.")
+TableS14 <- head(do.call("myAIC", as.list(c(mod_names, getmodel=T)))) %>%
+	mutate(model = fct_recode(model,
+		"trait + life stage" = "m.fixed.t.s",
+		"life stage" = "m.fixed.s",
+		"trait + temp diff + life stage" = "m.fixed.t.m.s",
+		"life stage + heritability type" = "m.fixed.s.h",
+		"life stage + temp diff" = "m.fixed.m.s",
+		"trait + life stage + heritability type" = "m.fixed.t.s.h"))
+write.csv(TableS14, file="Suppl Tables/TableS14.csv", row.names=F)
+TableS14
+
+```
+
+### Step 4: Fit final model
+
+```{r}
+final.model.Diii <- rma(yi=val.log ~ trait + stage, vi=sv.log, 
+					 data=dat_tm_nz, method="REML", test="knha")
+final.model.Diii
+save(final.model.Diii, file="Models/final.model.Diii.Rdata")
+
+final.model.Diii$I
+final.model.Diii$k - final.model.Diii$p
+```
+
+
+
+------------------------------------------------------------------------
+
+R session info:
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,7 @@
+"model","df","AICc","ΔAICc"
+"trait + heritability type",6,69.3728207264981,0
+"trait",5,69.8689260172461,0.496105290747991
+"trait x temp diff",11,71.2597219730939,1.88690124659585
+"trait + heritability type + temp diff",7,71.6895787916892,2.3167580651911
+"trait + temp diff",6,72.3693473332264,2.99652660672837
+"trait x temp diff + heritability type",12,72.5107600181593,3.13793929166121

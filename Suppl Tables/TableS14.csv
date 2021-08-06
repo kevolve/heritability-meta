@@ -1,0 +1,7 @@
+"model","df","AICc","ΔAICc"
+"trait + life stage",7,56.8292000002078,0
+"life stage",2,57.1317557443095,0.302555744101767
+"trait + temp diff + life stage",8,57.3906156142863,0.561415614078555
+"life stage + heritability type",3,59.3595885959469,2.53038859573909
+"life stage + temp diff",3,59.6696316421561,2.84043164194838
+"trait + life stage + heritability type",8,60.1992162885537,3.37001628834595

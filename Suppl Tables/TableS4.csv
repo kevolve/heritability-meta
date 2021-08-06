@@ -1,0 +1,7 @@
+"model","df","AICc","ΔAICc"
+"trait x life stage + heritability type",18,80.1477391242556,0
+"trait x life stage",17,82.1811628831305,2.03342375887497
+"trait x life stage + growth form",21,88.9894395884363,8.84170046418075
+"trait x life stage + heritability type + growth form",22,90.132476806963,9.98473768270739
+"trait + life stage + growth form",12,91.8518057731602,11.7040666489046
+"trait + heritability type + growth form",11,92.3941520450503,12.2464129207947

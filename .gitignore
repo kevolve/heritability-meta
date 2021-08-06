@@ -1,0 +1,9 @@
+/GITIGNORE/
+.DS_Store
+.RData
+.RDataTmp
+.Rapp.history
+.Rhistory
+.Rproj.user
+~$*.docx
+Data/~$heritability_estimates.xlsx

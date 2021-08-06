@@ -1,0 +1,1260 @@
+---
+title: "Coral Heritability Meta-analysis"
+subtitle: "Supplementary Code Documentation C: Supplementary Tables and Figures"
+author: "Kevin R Bairos-Novak"
+date: "Document last run on `r format(Sys.time(), '%Y-%m-%d')`"
+output:
+  html_document: 
+    df_print: kable
+    toc: yes
+    toc_fload: true
+    highlight: tango
+    theme: cerulean
+    number_sections: no
+    fig_width: 10
+    fig_height: 8
+    fig_caption: yes
+    code_folding: hide
+    self_contained: TRUE
+editor_options: 
+  chunk_output_type: console
+knit: (function(inputFile, ...) {
+    rmarkdown::render(
+      inputFile,
+      output_file = paste0(
+        xfun::sans_ext(inputFile),"_",format(Sys.time(), '%Y-%m-%d'), ".html"),
+      envir = globalenv()
+    )})
+---
+
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, comment="", 
+					  message=F, warning=F, fig.height=5)
+patt <- "Supplementary_Code_Documentation_C_Supplementary_Tables_and_Figures"
+x <- paste0(patt,"_",format(Sys.time(), '%Y-%m-%d'), ".html")
+y <- list.files(pattern = glob2rx(paste0(patt,"*.html")))
+y <- y[!(y == x)]
+unlink(y, recursive=T)
+setwd("~/Documents/PhD Thesis/Heritability meta")
+rm(list=ls())
+
+## cache is only valid with a specific version of R and session info
+## cache will be kept for at most a month (re-compute the next month)
+# opts_chunk$set(cache.extra = list(
+#   R.version, sessionInfo(), format(Sys.Date(), '%Y-%m')
+# ))
+```
+
+<style>
+.container { width: 1000px; }
+h2 { color: #f8f8f8; background-color: #437FAA; }
+h3 { color: #f8f8f8; background-color: #437FAA; text-align: center; }
+<!-- Get highlight from Terminal: pandoc --print-highlight-style tango -->
+</style>
+
+
+# Start
+```{r}
+rm(list=ls())
+setwd("~/Documents/PhD Thesis/Heritability meta")
+
+
+library(readxl)
+library(tidyverse); theme_set(theme_light())
+library(metafor)
+library(tidytext)
+library(shades)
+library(ggridges)
+library(ggplotify)
+require(ggnewscale)
+library(grid)
+library(gridExtra)
+library(gt)
+library(cowplot)
+library(RColorBrewer)
+library(viridis)
+source('Functions/useful_functions.R')
+source('Functions/mlm.variance.distribution.R')
+
+# Load complete data:
+load("Data/heritability_estimates_processed.RData")
+data <- data.full %>% 
+	filter(trait != "gamete contribution") %>% 
+	mutate(trait = fct_drop(trait))
+dat_s <- data %>% 
+	filter(!(trait %in% c("photochemistry", "immune response"))) %>% 
+	mutate(trait = factor(trait))
+dat_sh <- data %>% 
+	filter(!(trait %in% c("photochemistry", "nutrient content", "immune response"))) %>% 
+	mutate(trait = factor(trait))
+dat_shg <- data %>% 
+	filter(trait %in% c("symbiont community", "survival", "nutrient content", "growth", "bleaching")) %>% 
+	filter(!(growth.form %in% c("columnar", "encrusting"))) %>%
+	mutate(trait = factor(trait), growth.form = factor(growth.form))
+dat_tm <- data %>% 
+	filter(!is.na(temp.diff)) %>%
+	filter(!(trait %in% c("symbiont community", "morphology", "gene expression"))) %>% 
+	mutate(trait = factor(trait),
+		   temp.manip = temp.manip.plus.others,
+		   temp.s = sqrt(temp.diff))
+dat_tm_nz <- dat_tm %>% filter(temp.diff >0) %>%
+	mutate(trait = factor(trait), 
+		   stage = factor(stage), 
+		   h2 = factor(h2),
+		   growth.form = factor(growth.form))
+
+# Load final models:
+load("Models/final.model.Rdata")
+load("Models/final.model.A.Rdata")
+load("Models/final.model.B.Rdata")
+load("Models/final.model.C.Rdata")
+load("Models/final.model.Di.Rdata")
+load("Models/final.model.Dii.Rdata")
+load("Models/final.model.Diii.Rdata")
+
+# Objects for plotting:
+mod.coef <- update(final.model, val.log ~ trait-1, data=data.full) %>% coef() # includes gamete contribution
+trait.colors <- gg_color_hue(length(levels(data.full$trait)))
+trait.levels <- gsub("trait","",names(mod.coef))[order(mod.coef)]
+
+```
+
+# Supplementary tables and figures
+
+## Fig. S1
+
+```{r, fig.cap = "**Figure S1.** Funnel plot for overall analysis"}
+funnel(final.model, yaxis="seinv")
+```
+
+## Table S1-2, Fig. S2 - Overall analysis: main effects only (excluding temperature due to incompleteness across all data)
+```{r, fig.cap = "**Figure S2.** Model coefficients for the top fixed effect structures of the overall analysis"}
+x <- read.csv(file="Suppl Tables/TableS1.csv")
+y <- read.csv(file="Suppl Tables/TableS2.csv") %>% head(5)
+data.subset = "the complete dataset"
+beyond.opt.mod="trait + life stage + heritability type + growth form"
+
+n=1
+
+make_modsel_table(x,y,data.subset, beyond.opt.mod,n=n); n=n+1
+make_coef_table(final.model, y, data.subset=data.subset, n=n); n=n+1
+```
+
+## Table S3-4, Fig. S3 - Sub-analysis A: examine trait x life stage interaction
+```{r, fig.cap="**Figure S3.** Model coefficients for the top fixed effect structures of sub-analysis A"}
+x <- read.csv(file="Suppl Tables/TableS3.csv")
+y <- read.csv(file="Suppl Tables/TableS4.csv") %>% head(5)
+data.subset = "a subset to examine interactions between trait type and life stage"
+beyond.opt.mod="trait x life stage + heritability type + growth form"
+
+make_modsel_table(x,y,data.subset, beyond.opt.mod,n=n); n=n+1
+make_coef_table(final.model.A, y, data.subset=data.subset, n=n); n=n+1
+```
+
+## Table S5-6, Fig. S4 - Sub-analysis B: examine trait x heritability interaction
+```{r, fig.cap="**Figure S4.** Model coefficients for the top fixed effect structures of sub-analysis B"}
+x <- read.csv(file="Suppl Tables/TableS5.csv")
+y <- read.csv(file="Suppl Tables/TableS6.csv") %>% head(5)
+data.subset = "a subset to examine interactions between trait type and heritability type"
+beyond.opt.mod="trait x heritability type + trait x life stage + growth form"
+
+make_modsel_table(x,y,data.subset, beyond.opt.mod,n=n); n=n+1
+make_coef_table(final.model.B, y, data.subset=data.subset, n=n); n=n+1
+```
+
+## Table S7-8, Fig. S5 - Sub-analysis C: examine trait x growth form interaction
+```{r, fig.cap="**Figure S5.** Model coefficients for the top fixed effect structures of sub-analysis C"}
+x <- read.csv(file="Suppl Tables/TableS7.csv")
+y <- read.csv(file="Suppl Tables/TableS8.csv") %>% head(5)
+data.subset = "a subset to examine interactions between trait type and growth form"
+beyond.opt.mod="trait x growth form + trait x life stage + heritability type"
+
+make_modsel_table(x,y,data.subset, beyond.opt.mod,n=n); n=n+1
+make_coef_table(final.model.C, y, data.subset=data.subset, n=n); n=n+1
+```
+
+
+## Table S9-10, Fig. S6 - Sub-analysis D-i: examine trait x temperature difference interaction
+```{r, fig.cap="**Figure S6.** Model coefficients for the top fixed effect structures of sub-analysis Dii"}
+x <- read.csv(file="Suppl Tables/TableS9.csv")
+y <- read.csv(file="Suppl Tables/TableS10.csv") %>% head(5)
+data.subset = "a subset to examine interactions between trait type and temperature difference (covariate; square-root transformed)"
+beyond.opt.mod="trait x temp diff + life stage + heritability type + growth form"
+
+make_modsel_table(x,y,data.subset, beyond.opt.mod,n=n); n=n+1
+make_coef_table(final.model.Di, y, data.subset=data.subset, n=n); n=n+1
+```
+
+## Table S11-12, Fig. S7 - Sub-analysis D-ii: examine trait x temperature difference (binary) interaction
+```{r, fig.cap="**Figure S7.** Model coefficients for the top fixed effect structures of sub-analysis Di"}
+x <- read.csv(file="Suppl Tables/TableS11.csv")
+y <- read.csv(file="Suppl Tables/TableS12.csv") %>% head(5)
+data.subset = "a subset to examine interactions between trait type and temperature manipulation (binary)"
+beyond.opt.mod="trait x temp manip + life stage + heritability type + growth form"
+
+make_modsel_table(x,y,data.subset, beyond.opt.mod,n=n); n=n+1
+make_coef_table(final.model.Dii, y, data.subset=data.subset, n=n); n=n+1
+```
+
+## Table S13-14, Fig. S8 - Sub-analysis D-iii: examine trait x temperature difference interaction, excluding zero values
+```{r, fig.cap="**Figure S8.** Model coefficients for the top fixed effect structures of sub-analysis Diii"}
+x <- read.csv(file="Suppl Tables/TableS13.csv")
+y <- read.csv(file="Suppl Tables/TableS14.csv") %>% head(5)
+data.subset = "a subset to examine interactions between trait type and temperature difference (covariate; square-root transformed, **non-zero values only**)"
+beyond.opt.mod="trait x temp diff + life stage + heritability type + growth form"
+
+make_modsel_table(x,y,data.subset, beyond.opt.mod,n=n); n=n+1
+make_coef_table(final.model.Diii, y, data.subset=data.subset, n=n); n=n+1
+```
+
+## Table S15
+
+**Table S15.** Number of heritability estimates calculated across relatedness type (rows) and heritability model type (columns). Note that the heritabilities calculated may be either narrow-sense or broad-sense depending on the experimental design and whether or not clones were used.
+
+```{r}
+require(stringr); require(knitr)
+data %>%
+	mutate(relatedness.info = str_remove(relatedness.info, " \\(.*\\)"),
+		   relatedness.info = str_replace(relatedness.info, "inferred pedigree", "pedigree"),
+		   model.type = str_remove(model.type, " \\(.*\\)"),
+		   model.type = str_replace(model.type, "animal model approximation", "animal model")) %>%
+	select(relatedness.info, model.type) %>%
+	table %>%
+	knitr::kable()
+```
+
+
+## Fig. S9
+
+Plot of residuals by trait, while accounting for heritability type, life stage, and whether or not the individuals were reared in a common shared environment from larvae. Note the clear confound of all adults not being raised in controlled conditions from larvae, and almost all juveniles and larvae being raised in controlled environments.
+
+```{r}
+data$resid <- resid(final.model)
+pS9 <- data %>%
+	ggplot(aes(trait, resid, col=reared.from.larvae.in.common.env)) +
+	geom_point() +
+	geom_hline(yintercept=0, linetype = 2, color="grey") +
+	facet_grid(stage~h2, switch="y") +
+	labs(x = "Trait type", y = "Residual value") +
+	theme(#axis.text.y.left=element_blank(),
+		  axis.text.x=element_text(angle = 60, hjust=1),
+		  #axis.ticks.y.left=element_blank(),
+		  strip.text.y = element_text(),
+		  panel.spacing = unit(0.1, "lines"),
+		  panel.grid.major=element_blank(),
+		  panel.grid.minor=element_blank(),
+		  legend.text.align = 0.5,
+		  strip.background = element_rect(fill=NA, color = "grey"),
+		  strip.text = element_text(color="black"),
+		  strip.placement = "outside") +
+		scale_color_discrete(name = "Reared in a common\nshared environment\nfrom larvae?")
+
+
+
+```
+
+
+```{r, fig.cap = "**Fig. S9.** Model residual values from the overall analysis using trait type alone as a fixed effect vs. life stage (row facets), heritability type (column facets), and whether or not individuals were reared from larvae in a common shared environment (colour)."}
+pS9
+
+setEPS()
+postscript("Figures/FigS9.eps", family="Helvetica", width=6, height=6)
+pS9 # 1000 x 700
+dev.off()
+```
+
+## Fig. S10
+
+```{r, fig.width=10, fig.height=8, echo=F}
+
+missing.trait <- !(trait.levels %in% levels(data$trait))
+new.levels <- trait.levels[!missing.trait]
+new.colors <- trait.colors[!missing.trait]
+data.full.copy <- data.full %>%
+	arrange(desc(trait), desc(val.log))
+pS10 <-
+	data.full.copy %>% 
+	mutate(trait = fct_relevel(trait, rev(trait.levels))) %>% 
+	mutate(est.id = factor(1:nrow(data.full.copy)),
+		   temp.model.type = ifelse(is.na(temp.model.type), "NA: no temperature manip", temp.model.type)) %>%
+	mutate(lwr = val.log - qt(0.975, 100)*se.log, upr = val.log + qt(0.975, 100)*se.log,
+		   lwr=ifelse(lwr<log(0+0.2),log(0+0.2),lwr), 
+		   upr=ifelse(upr>log(1.2),log(1.2),upr)) %>%
+	ggplot(data=., aes(y=as.numeric(est.id), x=val.log)) + 
+	labs(x="Heritability estimate (± 95% CI)", y="Study") + # 95% CI
+	coord_cartesian(xlim =  log(c(-0.0006, 1)+0.2)) + # clip="off"
+	scale_x_continuous(
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
+	scale_y_reverse(breaks = 1:length(data.full.copy$study),
+					labels = (data.full.copy$study),
+					expand = expansion(mult=c(0.0005,0.0005)),
+					sec.axis = 
+						sec_axis(~., name="Species", labels = (data.full.copy$species),
+								 breaks = 1:length(data.full.copy$species))) +
+	facet_grid(trait~., scales = "free_y", space = "free_y") +
+	theme(#axis.text.y.left=element_blank(),
+		  axis.text.y=element_text(size=rel(0.75)),
+		  axis.title.y=element_blank(),
+		  axis.title.x=element_text(),
+		  #axis.ticks.y.left=element_blank(),
+		  strip.text.y = element_blank(),
+		  panel.spacing = unit(0.1, "lines"),
+		  panel.grid.major.y=element_blank(),
+		  panel.grid.minor=element_blank(),
+		  legend.text.align = 0, # expression causes centred legend labels
+		  axis.text.y.right = element_text(face = "italic")) + 
+	
+	# Add trait legend + error bars
+	geom_errorbar(
+		aes(color=trait, xmin=lwr, xmax=upr, 
+			linetype=imputed.se), width = 1) +
+	scale_linetype_discrete(name = "Imputed 95% CI") +
+	geom_point(aes(x=val.log, fill=temp.model.type), 
+			   color="white", size=3, stroke=1, shape=21) +
+	scale_fill_discrete(name = "How temperature was modelled:") +
+	scale_colour_discrete(name = "Trait type:")
+
+## Manually edit plot border to have trait colouration
+g <- ggplot_gtable(ggplot_build(pS10))
+panel_names <- which(grepl('panel-', g$layout$name))
+colos <- trait.colors
+k <- 1
+for (i in panel_names) {
+	j <- which(grepl('panel.border', g$grobs[[i]]$childrenOrder))
+	g$grobs[[i]]$children[[j]]$gp$col <- colos[k]
+	k <- k+1
+}
+
+pS10 <- g
+
+```
+
+```{r, fig.cap = "**Fig. S10.** Heritability estimate by temperature model type"}
+plot_grid(pS10)
+
+setEPS()
+postscript("Figures/FigS10.eps", family="Helvetica", width=9, height=13)
+plot_grid(pS10) # 1000 x 700
+dev.off()
+```
+
+## Fig. S11
+
+Similar to Fig. S9, but for the heritability model used to estimate heritability for each study.
+
+```{r}
+
+data <- data %>%
+	mutate(model.type2 = str_remove(model.type, " \\(.*\\)"),
+		   model.type2 = str_replace(model.type2, "animal model approximation", "animal model"))
+
+pS11 <- data %>%
+	ggplot(aes(trait, resid, col=model.type2)) +
+	geom_point() +
+	geom_hline(yintercept=0, linetype = 2, color="grey") +
+	facet_grid(stage~h2, switch="y") +
+	labs(x = "Trait type", y = "Residual value") +
+	scale_color_discrete(name = "Model type",
+						 labels = c("animal model", "ANOVA-method", "Ritland regression\n(all from a single study)")) +
+	theme(#axis.text.y.left=element_blank(),
+		  axis.text.x=element_text(angle = 60, hjust=1),
+		  #axis.ticks.y.left=element_blank(),
+		  strip.text.y = element_text(),
+		  panel.spacing = unit(0.1, "lines"),
+		  panel.grid.major=element_blank(),
+		  panel.grid.minor=element_blank(),
+		  legend.text.align = 0.5,
+		  strip.background = element_rect(fill=NA, color = "grey"),
+		  strip.text = element_text(color="black"),
+		  strip.placement = "outside")
+
+
+```
+
+```{r, fig.cap = "**Fig. S11.** Model residual values from the overall analysis using trait type alone as a fixed effect vs. life stage (row facets), heritability type (column facets), and the type of model used to estimate the heritability coefficient (colour)."}
+pS11
+
+setEPS()
+postscript("Figures/FigS11.eps", family="Helvetica", width=6, height=6)
+pS11 # 1000 x 700
+dev.off()
+```
+
+# Reported heritabilities
+
+Code to provide summary numbers for literature review results paragraph of text.
+
+```{r, eval=F}
+# Review results paragraph:
+summarise.coverage("h2", "study", data.full)
+summarise.coverage("h2", "est.id", data.full)$Y
+
+summarise.coverage("trait", "study", data.full)
+summarise.coverage("trait", "est.id", data.full)
+
+summarise.coverage("study", "est.id", data.full)$Y
+
+summarise.coverage("stage", "est.id", data.full)$Y
+summarise.coverage("stage", "study", data.full)$Y
+head(summarise.coverage("stage", "study", data.full)$X, 3)
+data.full %>% filter(study == "Quigley et al. 2017") %>%
+	select(study, species, trait, stage)
+
+summarise.coverage("h2", "est.id", data.full)$Y
+summarise.coverage("h2", "study", data.full)$Y
+head(summarise.coverage("h2", "study", data.full)$X, 3)
+
+summarise.coverage("growth.form", "est.id", data.full)$Y
+summarise.coverage("growth.form", "study", data.full)$Y
+head(summarise.coverage("growth.form", "study", data.full)$X, 3)
+
+data.full %>% pull(study) %>% unique %>% length
+data.full %>% filter(!is.na(temp.diff)) %>% pull(study) %>% unique %>% length
+
+data.full %>% pull(est.id) %>% unique %>% length
+data.full %>% filter(!is.na(temp.diff)) %>% pull(est.id) %>% unique %>% length
+
+hist(dat_tm$temp.diff, breaks=10)
+
+data.full %>% filter(temp.diff == 0) %>% pull(est.id) %>% unique %>% length
+data.full %>% filter(temp.diff == 0) %>% pull(study) %>% unique %>% length
+
+data.full %>% filter(temp.diff != 0) %>% pull(est.id) %>% unique %>% length
+data.full %>% filter(temp.diff != 0) %>% pull(study) %>% unique %>% length
+
+summarise.coverage("trait", "est.id", dat_tm)$Y
+summarise.coverage("trait", "study", dat_tm)$Y
+head(summarise.coverage("growth.form", "study", dat_tm)$X, 3)
+
+
+data.full %>% group_by(species) %>% count(sort=T) # n=19 species
+data.full %>% group_by(reproduction, symbiont.transmission) %>% count(sort=T)
+
+data.full %>% 
+	group_by(species, reproduction, symbiont.transmission) %>% 
+	count(sort=T) %>% select(-n) %>%
+	ungroup() %>%
+	group_by(reproduction, symbiont.transmission) %>%
+	count(sort=T)
+	
+```
+
+Note: code above not run to avoid excessive output tables. 
+
+# Main model results
+
+## Overall model: ~ trait type
+
+#### Final model summary
+
+```{r}
+# Uses nearly full data, minus one trait with only a single estimate
+final.model <- rma.mv(yi=val.log ~ trait, V=sv.log, 
+					  random = ~1|study/est.id, data=data, method="REML", tdist=T)
+mlm.variance.distribution(final.model)
+```
+
+Model I^2 and R^2:
+
+```{r}
+# Main model:
+
+# Get estimate of I^2, residual heterogeneity:
+W <- diag(1/data$sv.log) # create initial weighting matrix
+X <- model.matrix(final.model)
+P <- W - W %*% X %*% solve(t(X) %*% W %*% X) %*% t(X) %*% W
+I2 <- 100 * final.model$sigma2 / (sum(final.model$sigma2) + (final.model$k-final.model$p)/sum(diag(P)))
+cat(paste0("Overall residual heterogeneity, I^2 = ",round(sum(I2),1), "%"))
+cat(paste0("Between-study residual heterogeneity, I^2 = ",round(I2[1],1), "%"))
+cat(paste0("Within-study residual heterogeneity, I^2 = ",round(I2[2],1), "%"))
+
+# Get estimate of R^2: 
+Model1 <- rma.mv(yi=val.log ~ 1, V=sv.log, 
+					  random = ~1|study/est.id, data=data, method="ML", tdist=T)
+Model2 <- rma.mv(yi=val.log ~ trait, V=sv.log, 
+					  random = ~1|study/est.id, data=data, method="ML", tdist=T)
+(Model1$sigma2[1] - Model2$sigma2[1]) / Model1$sigma2[1] # R^2 = 0 or -0.14
+(Model1$sigma2[2] - Model2$sigma2[2]) / Model1$sigma2[2] # R^2 = 0.56
+(sum(Model1$sigma2) - sum(Model2$sigma2)) / sum(Model1$sigma2) # R^2 = 0.29 overall?
+```
+
+#### Model estimates 
+
+Model estimates ~ trait type:
+
+```{r}
+overall_trait_mod_est <- update(final.model, .~.-1, ) %>% # remove intercept
+	summary %>% coef %>% # extract model coefficients + CI
+	rownames_to_column("trait") %>%
+	mutate(trait = str_remove(trait, "trait")) %>%
+	rename(est = estimate)
+overall_trait_mod_est_backtrans <- overall_trait_mod_est %>%
+	mutate(across(.cols = c(est, ci.lb, ci.ub), # apply an anonymous fn
+				  .fns = function(x){exp(x)-0.2} )) %>% # to back-transform
+	select(-se, -tval, -pval) %>%
+	mutate(ci.ub = ifelse(ci.ub >1, 1, ci.ub))
+write.csv(overall_trait_mod_est, file="Model Estimates/overall_trait_mod_est.csv", row.names=F)
+# write.csv(overall_trait_mod_est_backtrans, file="Model Estimates/overall_trait_mod_est_backtrans.csv", row.names=F)
+
+overall_trait_mod_est
+
+```
+
+Model estimates ~ trait type + h2, ~ trait type + life stage:
+
+```{r}
+overall_trait_mod_est_addh2 <- update(final.model, .~trait + h2 -1, ) %>% # remove intercept
+	summary %>% coef %>% # extract model coefficients + CI
+	rownames_to_column("trait") %>%
+	mutate(trait = str_remove(trait, "trait")) %>%
+	rename(est = estimate)
+overall_trait_mod_est_addh2_backtrans <- overall_trait_mod_est_addh2 %>%
+	mutate(across(.cols = c(est, ci.lb, ci.ub), # apply an anonymous fn
+				  .fns = function(x){exp(x)-0.2} )) %>% # to back-transform
+	select(-se, -tval, -pval) %>%
+	mutate(ci.ub = ifelse(ci.ub >1, 1, ci.ub))
+write.csv(overall_trait_mod_est_addh2, file="Model Estimates/overall_trait_mod_est_addh2.csv", row.names=F)
+
+overall_trait_mod_est_addh2
+
+
+overall_trait_mod_est_addstage <- update(final.model, .~trait + stage -1, ) %>% # remove intercept
+	summary %>% coef %>% # extract model coefficients + CI
+	rownames_to_column("trait") %>%
+	mutate(trait = str_remove(trait, "trait")) %>%
+	rename(est = estimate)
+overall_trait_mod_est_addstage_backtrans <- overall_trait_mod_est_addstage %>%
+	mutate(across(.cols = c(est, ci.lb, ci.ub), # apply an anonymous fn
+				  .fns = function(x){exp(x)-0.2} )) %>% # to back-transform
+	select(-se, -tval, -pval) %>%
+	mutate(ci.ub = ifelse(ci.ub >1, 1, ci.ub))
+write.csv(overall_trait_mod_est_addstage, file="Model Estimates/overall_trait_mod_est_addstage.csv", row.names=F)
+
+overall_trait_mod_est_addstage
+
+```
+
+These estimates are used to calculate effect sizes in separate excel spreadsheets (found at my github repo: [ecolology/heritabilitymeta](https://github.com/ecolology/heritabilitymeta)
+
+## Sub-analysis A: ~ trait x life stage + h2 (dat_s subset)
+
+#### Final model output
+
+```{r}
+# Data subset:
+dat_s <- data %>% 
+	filter(!(trait %in% c("photochemistry", "immune response"))) %>%
+	mutate(trait = fct_drop(trait))
+# table.plot("trait", "stage", Data=dat_s)
+
+final.model.A <- rma(yi=val.log ~ trait*stage + h2, 
+					 vi=sv.log, data=dat_s, method="REML", test="knha")
+final.model.A
+
+```
+
+Model estimates ~ trait type x life stage + heritability type:
+
+```{r}
+
+subA_mod_est <- dat_s %>% 
+	group_by(trait, h2, stage) %>%
+	count() %>% ungroup %>%
+	arrange(h2, stage, trait) %>%
+	mutate(est = NA_real_, se = NA_real_)
+
+for (i in 1:nrow(subA_mod_est)) {
+	row.to.fill <- slice(subA_mod_est, i)
+	new.data <- dat_s %>% 
+		mutate(
+			trait = fct_relevel(trait, as.character(row.to.fill$trait)),
+			h2    = fct_relevel(h2, as.character(row.to.fill$h2)),
+			stage = fct_relevel(stage, as.character(row.to.fill$stage)))
+	mod <- new.data %>%
+		rma(yi=val.log ~ trait * stage + h2, vi=sv.log,
+			   data=., method="REML", test = "knha")
+	subA_mod_est[i,] <- 
+		row.to.fill %>% mutate(est = coef(mod)["intrcpt"], se = ifelse(is.na(mod$se[1]), 0, mod$se[1]))
+}
+rm(row.to.fill, new.data, mod)
+
+subA_mod_est <- subA_mod_est %>%
+	mutate(ci.lb = est - se*qt(0.975, 100),
+		   ci.ub = est + se*qt(0.975, 100))
+subA_mod_est_backtrans <- subA_mod_est %>%
+	mutate(across(.cols = c(est, ci.lb, ci.ub), # apply an anonymous fn
+				  .fns = function(x){exp(x)-0.2} )) %>% # to back-transform
+	select(-se) %>%
+	mutate(ci.ub = ifelse(ci.ub >1, 1, ci.ub))
+write.csv(subA_mod_est, file="Model Estimates/subA_mod_est.csv", row.names=F)
+# write.csv(subA_mod_est_backtrans, file="Model Estimates/subA_mod_est_backtrans.csv", row.names=F)
+
+subA_mod_est
+```
+
+
+These estimates are used to calculate effect sizes in separate excel spreadsheets (found at my github repo: [ecolology/heritabilitymeta](https://github.com/ecolology/heritabilitymeta))
+
+
+#### Post-hoc contrasts of life stage x trait type
+
+```{r}
+# Create contrast matrices for testing hypotheses:
+group <- paste0(dat_s$trait, "_", dat_s$stage)
+group <- aggregate(model.matrix(final.model.A) ~ group, FUN=mean)
+rownames(group) <- group$group
+(group <- group[,-1])
+
+# From CI plot, a number of potential differences:
+#     H1: growth juvenile vs. growth adult (broad sense constant)
+#     H2: bleaching juvenile vs. bleaching adult
+#     H3: bleaching juvenile vs. bleaching larvae
+#     H3: nutrient content larvae vs. nutrient content adult
+cont.mat <- rbind(group["growth_juvenile",] - group["growth_adult",],
+				  group["bleaching_juvenile",] - group["bleaching_adult",],
+				  group["bleaching_juvenile",] - group["bleaching_larvae",],
+				  group["nutrient content_larvae",] - group["nutrient content_adult",]) %>% as.matrix
+
+# anova(final.model.Dii, L=cont.mat) # unadjusted
+multcomp::glht(final.model.A,
+					   linfct=cont.mat, 
+					   test=Ftest()) %>%
+	summary()
+```
+
+#### Effect sizes of $h^2$ vs. $H^2$:
+
+```{r}
+beta = -coef(final.model.A)["h2narrow"]
+
+## Equation for H2:
+# H2 = e^beta * h2 + 0.2(e^beta - 1))
+# h2 = 0.1, H2 = ...
+exp(beta) * 0.1 + (0.2*exp(beta)-0.2)
+# H2 = 0.2006651
+
+# Another way to write it: H2 = m * h2 + b:
+# m = 1.33555; b = 0.06711006
+h2 <- seq(0.01,0.8,0.01)
+H2 <- exp(beta) * h2 + (0.2*exp(beta)-0.2)
+plot(H2, h2, type = 'l', xlim = c(0,1))
+
+# other way: h2 = (H2 - 0.2(e^beta - 1))*e^(-beta)
+# h2 = exp(-beta) * H2 - (0.2(e^beta - 1))*e^(-beta)
+# h2 = 0.831158 * H2 -0.0337684
+(0.2*exp(beta) - 0.2)*exp(-beta) # -intercept
+
+# e.g., H2 = 0.2:
+0.748755 * 0.2 -0.05024899
+# h2 = 0.1
+```
+
+
+## Sub-analysis Di: models of temperature difference (dat_tm subset)
+
+#### Final and trait x temperature model results
+
+Final model:
+
+```{r}
+final.model.Di
+```
+
+
+Trait x temp model:
+
+```{r}
+traitxtemp.mod <- rma.mv(yi=val.log ~ trait*temp.s -1, 
+					  V=sv.log, random = ~1|study/est.id,
+					  data=dat_tm, method="REML", tdist=T, sigma2 = c(NA, NA))
+traitxtemp.mod
+```
+
+Trait + h2 + temp model:
+
+```{r}
+trait.temp.h2.mod <- rma.mv(yi=val.log ~ trait + h2 + temp.s -1, 
+					  V=sv.log, random = ~1|study/est.id,
+					  data=dat_tm, method="REML", tdist=T, sigma2 = c(NA, NA))
+trait.temp.h2.mod
+
+# Effect size with +1°C across low, medium, and high heritability:
+x <- c(0.1, 0.5, 0.9)
+# +1°C:
+round(exp( log(x+0.2) +0.01*sqrt(1)) - 0.2, 3)/x
+round(exp( log(x+0.2) +0.03*sqrt(3)) - 0.2, 3)/x
+
+```
+
+
+#### Effect sizes for temperature difference
+
+```{r}
+# Effect size of heritability:
+dat_tm_traitlevels <- levels(dat_tm$trait)
+h2_est <- data.frame(trait=NULL, broad=NULL, narrow=NULL)
+for(i in seq_along(dat_tm_traitlevels)) {
+	final.model.Di %>%
+	update(.~., data=mutate(dat_tm, trait = fct_relevel(trait, dat_tm_traitlevels[i]))) %>%
+	summary %>% coef %>%
+	slice(1) %>%
+	pull(estimate) %>%
+		{data.frame(trait=dat_tm_traitlevels[i], broad=round(exp(.) - 0.2,3), narrow=round(exp(.-0.38792173)-0.2,3))} %>%
+		rbind(h2_est, .) -> h2_est
+	}
+h2_est <- h2_est %>%
+	mutate(rel.diff = broad/narrow) %>% 
+	arrange(-rel.diff)
+
+write.csv(h2_est, file="Effect size calculations/subDi_trait&h2_mod_est_effsizes.csv", row.names=F)
+
+# Effect size of temperature difference (use intercept to avoid calculating trait-specific slopes:
+for(i in seq_along(levels(dat_tm$trait))) {
+	new.mod <- final.model.Di %>%
+		update(.~trait*temp.s, 
+		   data=mutate(dat_tm, 
+		   			trait = fct_relevel(trait, levels(dat_tm$trait)[i]))) %>%
+		summary %>% coef %>%
+		rownames_to_column("trait")
+	temp.slope <- filter(new.mod, trait=="temp.s") %>% pull(estimate)
+	temp_est_new <- new.mod %>%
+		filter(trait=="intrcpt") %>%
+		pull(estimate) %>% {data.frame(
+			trait=dat_tm_traitlevels[i],
+			h2_0C  = exp(. +temp.slope*sqrt(0)) - 0.2,
+			h2_1C  = exp(. +temp.slope*sqrt(1)) - 0.2,
+			h2_3C  = exp(. +temp.slope*sqrt(3)) - 0.2)}
+	
+	if (i == 1) {temp_est <- temp_est_new} else {temp_est <- rbind(temp_est, temp_est_new)}
+		
+}
+temp_est
+
+# write.csv(temp_est, file="Model Estimates/subDi_traitxtemp.s_mod_est.csv", row.names=F)
+
+```
+
+Calculate relative effect sizes by each trait, with an increase in manipulated temperature of 0C, +1C, and +3°C:
+```{r}
+temp_est_effsizes <- temp_est %>%
+	mutate(plus1_diff = ifelse(h2_1C>h2_0C, 
+							   h2_1C/h2_0C, -1+h2_1C/h2_0C),
+		   plus3_diff = ifelse(h2_3C>h2_1C, 
+		   					h2_3C/h2_1C, -1+h2_3C/h2_1C))
+temp_est_effsizes
+write.csv(temp_est_effsizes, file = "Effect size calculations/subDi_traitxtemp.s_mod_est_effsizes.csv", row.names=F)
+```
+
+
+# Main Figures
+
+## Fig. 1
+
+```{r}
+# Fig. 1a
+p1a <- data.full %>% 
+	mutate(trait = fct_relevel(trait, trait.levels)) %>%
+	group_by(study) %>%
+	add_count(name="n_est") %>%
+	group_by(study, trait, n_est) %>%
+	count() %>%
+	ungroup() %>%
+	mutate(study = fct_reorder(study, (n_est))) %>% 
+	ggplot(aes(y=study, x=n)) +
+	geom_col(aes(fill=trait, group=trait)) +
+	# scale_y_discrete(expand = expansion(add=c(0,1))) + 
+	scale_x_continuous(expand = expansion(add=c(0,0.5))) +
+	scale_fill_manual(values = rev(lightness(trait.colors, scalefac(1.1)))) +
+	theme(legend.position = c(0.6, 0.35),
+		  legend.background = element_blank(),
+		  panel.grid = element_blank(),
+		  axis.title.y = element_blank()) +
+	guides(fill = guide_legend(reverse = TRUE)) +
+	labs(x = "Number of estimates", fill = "Trait type:")
+
+# data for Fig. 1b
+plot.data <-
+	data.full %>% 
+	mutate(trait = fct_relevel(trait, rev(trait.levels))) %>% 
+	arrange(desc(trait), desc(val.log)) %>%
+	mutate(est.id = factor(1:n())) %>%
+	mutate(lwr = val.log - qt(0.975, 100)*se.log, upr = val.log + qt(0.975, 100)*se.log,
+		   lwr=ifelse(lwr<log(0+0.2),log(0+0.2),lwr), 
+		   upr=ifelse(upr>log(1.2),log(1.2),upr)) %>% 
+	# select(study, species, est.id, val.log, trait, h2, stage, lwr, upr) %>%
+	complete(trait, nesting(stage, h2, imputed.se), 
+			 fill = list(n = NA_real_, est = NA_real_, se = NA_real_)) %>%
+	arrange(desc(trait), desc(val.log))
+
+# Fig. 1b
+p1b <- 
+	plot.data %>%
+	ggplot(data=., aes(y=as.numeric(est.id), x=val.log)) + 
+	labs(x="Heritability estimate (± 95% CI)") + # 95% CI
+	coord_cartesian(xlim =  log(c(-0.0006, 1)+0.2)) + # clip="off"
+	scale_x_continuous(expand = expansion(mult=c(0.0005,0.0005)),
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
+	scale_y_reverse(breaks = 1:length(na.omit(plot.data$est.id)),
+					labels = na.omit(plot.data$est.id),
+					# expand = expansion(mult=c(0.0005,0.001)),
+					expand = expansion(add = c(0.01,0.01)),
+					sec.axis = 
+						sec_axis(~., name="Species", labels = na.omit(plot.data$species),
+								 breaks = 1:length(na.omit(plot.data$species)))) +
+	facet_grid(trait~., scales = "free_y", space = "free_y") +
+	theme(axis.text.y.left=element_blank(),
+		  axis.ticks.y.left=element_blank(),
+		  axis.text.y=element_text(size=rel(0.75)),
+		  axis.title.y=element_blank(),
+		  axis.title.x=element_text(hjust=0.5),
+		  strip.text.y = element_blank(),
+		  panel.spacing = unit(0.1, "lines"),
+		  panel.grid.major=element_blank(),
+		  panel.grid.minor=element_blank(),
+		  legend.text.align = 0, # expression causes centred legend labels
+		  axis.text.y.right = element_text(face = "italic")) + 
+	
+	# Add heritability legend
+	geom_point(aes(x = val.log+100, fill=h2, shape=h2),
+			   color="white", size=4, stroke=1.5) + #shape=21,
+	scale_shape_manual(name = "Heritability type:",
+					   values = c(21, 21),
+					   labels = c(expression("broad-sense, "*italic(H^2)),
+					   		      expression("narrow-sense, "*italic(h^2)))) +
+	scale_fill_manual(name = "Heritability type:",
+					  values = c(lightness("grey", scalefac(1.1)),
+					  		   lightness("grey", scalefac(0.5))),
+					  labels = c(expression("broad-sense, "*italic(H^2)),
+					   		      expression("narrow-sense, "*italic(h^2)))) +
+	ggnewscale::new_scale("shape") + 
+	ggnewscale::new_scale("fill") + 
+	
+	# Add trait legend + error bars
+	geom_errorbar(
+		aes(color=trait, xmin=lwr, xmax=upr, 
+			linetype=imputed.se), width = 1) +
+	scale_linetype_discrete(name = "Imputed 95% CI") +
+	geom_point(aes(x=val.log+100, fill=trait), 
+			   color="white", size=3, stroke=1, shape=21) +
+	scale_fill_discrete(name = "Trait type:") +
+	scale_colour_discrete(name = "Trait type:") +
+	ggnewscale::new_scale("fill") + 
+	
+	# Add actual plotted points:
+	geom_point(aes(fill=interaction(trait, h2)), 
+			   color="white", size=2, stroke=1, shape=21) +
+	scale_fill_manual(
+		guide=FALSE,
+		values = c(lightness(trait.colors, scalefac(1.2)),
+				   lightness(trait.colors, scalefac(0.5))))
+
+## Manually edit plot border to have trait colouration
+g <- ggplot_gtable(ggplot_build(p1b))
+panel_names <- which(grepl('panel-', g$layout$name))
+colos <- trait.colors
+k <- 1
+for (i in panel_names) {
+	j <- which(grepl('panel.border', g$grobs[[i]]$childrenOrder))
+	g$grobs[[i]]$children[[j]]$gp$col <- colos[k]
+	k <- k+1
+}
+# grid::grid.draw(g)
+p1b <- g
+
+```
+
+
+```{r, fig.cap = "**Fig. 1.** Heritability estimates (N = 95) of various traits across 19 studies of reef-building corals. Colour indicates the specific trait type (hue) and heritability type (broad-sense H2 as lighter tint circles, narrow-sense h2 as darker shade). Left: Number of estimates reported in each study. Right: Point estimates of heritability and their associated 95% confidence/credible intervals (whiskers) on a logarithmic scale. The right-most axis indicates the species of coral. Heritability estimates closer to h2 = 1 indicate higher heritability and thus the potential for higher rates of adaptation within the population. Dashed lines represent heritability estimates where standard errors/confidence intervals were imputed."}
+
+# Save the plot
+setEPS()
+postscript("Figures/Fig1.eps", family="Helvetica", width=10, height=8)
+plot_grid(p1a, p1b, ncol=2, axis="tblr", align="h", rel_widths=c(3,4)) # 1200 x 700
+dev.off()
+
+# Plot the plot
+plot_grid(p1a, p1b, ncol=2, axis="tblr", align="h", rel_widths=c(3,4)) # 1200 x 700
+
+```
+
+## Fig. 2
+
+Next, we fit the model with different intercepts to accurately estimate all model coefficients, where data exists (a hacky way of avoiding using the model parameter estimates and variance-covariance matrix to estimate means + variances for all factor combinations).
+
+
+```{r}
+
+missing.trait <- !(trait.levels %in% levels(data$trait))
+new.levels <- trait.levels[!missing.trait]
+new.colors <- trait.colors[!missing.trait]
+
+trait.est <- final.model %>% update(.~trait-1) %>% {
+	data.frame(trait = gsub("trait","", x=names(coef(.))), 
+			   est = coef(.), se = {.}$se, row.names=NULL)} %>%
+	arrange(est) %>%
+	mutate(trait = fct_reorder(trait, est))
+
+p2 <-
+	data %>% group_by(trait) %>%
+	count() %>% ungroup %>%
+	full_join(trait.est, by = c("trait")) %>%
+	mutate(h2 = rep_len(c("broad", "narrow"),length(new.levels))) %>%
+	mutate(trait = fct_relevel(trait, new.levels)) %>%
+	mutate(lwr = est - se, upr = est + se,
+		   lwr=ifelse(lwr<log(0+0.2),log(0+0.2),lwr), 
+		   upr=ifelse(upr>log(1.2),log(1.2),upr)) %>%
+	ggplot(aes(y=est, x=trait)) + 
+	labs(y="Heritability estimate (±SE)", x=NULL) + # expression("(±"~sigma*")")
+	coord_cartesian(ylim =  log(c(-0.0006, 1)+0.2)) +
+	scale_y_continuous(
+		expand = expansion(mult = c(0,0)),
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
+	theme(#axis.title.x=element_blank(),
+		axis.text.x=element_text(color="white"),
+		axis.ticks.x=element_blank(),
+		panel.grid = element_blank()) +
+	geom_errorbar(position=position_dodge(width=0.3), width=0.3,
+				  aes(ymin=lwr, ymax=upr, col=trait)) +
+
+	geom_point(aes(y=est, fill=trait), position=position_dodge(width=0.3), 
+			   color = "white", shape=21, size=3, stroke=1.5) +
+	scale_fill_manual(name = "Trait type:", 
+						values = rev(new.colors)) +
+	scale_color_manual(name = "Trait type:", 
+					  values = rev(new.colors)) +
+	geom_text(aes(y=lwr, x=trait, label = paste0(n)), color="grey", nudge_y = -0.05) +
+	guides(fill = guide_legend(order=1, reverse=T), color = "none")
+
+```
+
+```{r, fig.cap = "**Fig. 2.** Heritability estimates ± S.E. for the overall dataset model. Traits are sorted along the spectrum according to their overall relative heritability, with values closer to 1 indicating more heritable traits. The number of estimates included in the meta-analysis for each trait type are indicated below each error bar in grey. The gamete compatibility trait type is excluded due to its reliance on only a single study/estimate. "}
+
+# Save it:
+setEPS()
+postscript("Figures/Fig2.eps", family="Helvetica", width=6, height=5)
+p2
+dev.off()
+
+# Plot it:
+p2
+```
+
+
+## Fig. 3
+
+```{r}
+
+# # Load previously-saved model estimates:
+# subA_mod_est <- read.csv("Model Estimates/subA_mod_est.csv")
+
+missing.trait <- !(trait.levels %in% levels(dat_s$trait))
+new.levels <- trait.levels[!missing.trait]
+new.colors <- trait.colors[!missing.trait]
+
+subA_mod_est2 <- subA_mod_est %>% # fill NA values to dodge groups appropriately
+	complete(trait, nesting(stage, h2), fill = list(n=NA_real_, est=NA_real_, se=NA_real_))
+
+p3 <-
+	subA_mod_est2 %>%
+	mutate(trait = fct_relevel(trait, new.levels),
+		   trait = fct_rev(trait),
+		   stage = fct_relevel(stage, "larvae", "juvenile")) %>%
+	mutate(lwr = est - se, upr = est + se,
+		   # lwr=ifelse(lwr<log(0+0.2),log(0+0.2),lwr), 
+		   upr=ifelse(upr>log(1.2),log(1.2),upr)) %>%
+	ggplot(aes(x=stage, y=est)) + 
+	facet_wrap(trait ~ ., ncol = 2) +
+	labs(y="Heritability estimate (±SE)", x=NULL) +
+	coord_cartesian(ylim =  log(c(-0.0006, 1)+0.2)) +
+	scale_y_continuous(
+		expand = expansion(add = c(0,0.01)),
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
+	theme(panel.grid = element_blank(),
+		  strip.background = element_rect(fill="white", colour = "white"),
+		  strip.text = element_text(color="black"),
+		  legend.position = c(0.76, 0.1)
+		  ) +
+	# geom_hline(data=trait.est,  # line for trait.est mean
+	# 		   aes(color=trait, group=trait, yintercept=est),
+	# 		   linetype="dashed", size=rel(0.25)) +
+	
+	
+	# Add heritability legend:x=stage, y=est
+	geom_point(aes(y=est, x=stage, fill=h2, shape=h2),
+			   position=position_dodge(width=0.5),
+			   color="white", size=3, stroke=1) + #shape=21,
+	scale_shape_manual(name = "Heritability type:",
+					   values = c(21, 21),
+					   labels = c(expression("broad-sense, "*italic(H^2)),
+					   		   expression("narrow-sense, "*italic(h^2)))) +
+	scale_fill_manual(name = "Heritability type:",
+					  values = c(lightness("grey", scalefac(1.1)),
+					  		   lightness("grey", scalefac(0.5))),
+					  labels = c(expression("broad-sense, "*italic(H^2)),
+					  		   expression("narrow-sense, "*italic(h^2)))) +
+	ggnewscale::new_scale("shape") +
+	ggnewscale::new_scale("fill") +
+	
+	
+	geom_errorbar(aes(x=stage, ymin=lwr, ymax=upr, col=trait, group=h2),
+				  position=position_dodge(width=0.5), 
+				  width=0.48) +
+	geom_point(aes(x=stage, y=est, fill=interaction(trait, h2), shape=h2), 
+			   position=position_dodge(width=0.5), 
+			   color="white", size=3, stroke=1) +
+	scale_colour_manual(name = "Trait type:", values = new.colors) +
+	scale_fill_manual(name = "Trait type:",
+					  values = c(lightness(new.colors,scalefac(1.2)), 
+					  	lightness(new.colors,scalefac(0.5)))) +
+	# nutrient content is only H^2, so skip
+	# Set up grey numbers in aesthetically-pleasing locations (using nudges):
+	geom_text(aes(y=est, x=stage, label = paste0(n), group=h2),
+			  nudge_x = ifelse(subA_mod_est2$h2 == "narrow", 1, -1) *
+			  	ifelse(subA_mod_est2$n>9,1.3,1) * 0.33,
+			  nudge_y = ifelse(subA_mod_est2$h2 == "broad" &
+			  				 	subA_mod_est2$trait == "survival" &
+			  				 	subA_mod_est2$stage == "juvenile", -0.1,0),
+			  color="grey", hjust=0.5) +
+
+	scale_shape_manual(name = "Heritability type:", values = c(21, 21),
+					   labels = c(expression("broad-sense, "*italic(H^2)),
+					   		   expression("narrow-sense, "*italic(h^2)))) +
+	guides(color = "none", fill = "none", shape="legend")
+# p3
+
+
+
+## Manually edit plot border to have trait colouration
+
+# Generate the ggplot2 plot grob
+g <- grid.force(ggplotGrob(p3))
+# Get the names of grobs and their gPaths into a data.frame structure
+grobs_df <- do.call(cbind.data.frame, grid.ls(g, print = FALSE))
+# Build optimal gPaths that will be later used to identify grobs and edit them
+grobs_df$gPath_full <- paste(grobs_df$gPath, grobs_df$name, sep = "::")
+grobs_df$gPath_full <- gsub(pattern = "layout::", 
+                            replacement = "", 
+                            x = grobs_df$gPath_full, 
+                            fixed = TRUE)
+# Get the gPaths of the strip background grobs
+panel_bd_gpath <- grobs_df$gPath_full[grepl(pattern = ".*panel\\.border*", 
+                                            x = grobs_df$gPath_full)]
+# Get the gPaths of the strip titles
+strip_txt_gpath <- grobs_df$gPath_full[grepl(pattern = "strip.*titleGrob.*text.*", 
+                                             x = grobs_df$gPath_full)]
+# Create a vector of the colours:
+nc=2 # number of facet columns (because panel_names are by row, need by col!)
+nr <- ceiling(length(new.colors) / nc)
+color_mat <- matrix(`length<-`(new.colors, nr * nc), nr, byrow = TRUE)
+color_border <- color_mat %>% as.vector() %>% na.omit() %>% c()
+color_text <- color_mat[,nc:1] %>% t() %>% as.vector %>% na.omit %>% rev
+
+# Edit the grobs:
+for (i in 1:length(panel_bd_gpath)){
+  g <- editGrob(grob = g, gPath = panel_bd_gpath[i], gp = gpar(col = color_border[i]))
+  g <- editGrob(grob = g, gPath = strip_txt_gpath[i], gp = gpar(col = color_text[i]))
+}
+# grid.newpage(); grid.draw(g)
+
+p3 <- g
+
+```
+
+```{r, fig.cap= "**Fig. 3.** Heritability estimates ± S.E. across trait types with multiple life stages (x-axis) and different heritability types (lighter points = broad-sense heritability; darker points = narrow-sense heritability). Associated sample sizes (# of original estimates) are adjacent to each point in grey."}
+
+# Save it:
+setEPS()
+postscript("Figures/Fig3.eps", family="Helvetica", width=5, height=7)
+grid.newpage(); grid.draw(p3)
+dev.off()
+
+# Plot it:
+grid.newpage(); grid.draw(p3)
+
+
+```
+
+
+
+
+## Fig. 4
+
+It is difficult to plot the relationship of temperature across the complete dataset and across trait type (and heritability type), since temperature difference was only important when there was an interaction with trait type (when heritability is included in the model, this interaction is not supported). However, the interaction with trait type is only robust in the case of immune response (for which all estimates originate from a single study).
+
+Thus, we report on the additive effect of trait type  and for the subset (including trait type and heritability type). In all cases, the effect of trait type is negligible, as was previously seen.
+
+```{r}
+
+# mod.temp.s <- 
+# 	rma.mv(yi=val.log ~ trait + sqrt(temp.diff),
+# 		   V=sv.log, random = ~1|study/est.id, method="REML", tdist=T,
+# 		   data=filter(data, !is.na(temp.diff)))
+
+plot.temp.mod <- final.model.Di %>% update(. ~ trait + temp.s, data=dat_tm)
+
+# Get values for plot:
+temp.s.beta <- round(coef(plot.temp.mod)["temp.s"], 4)
+temp.s.beta.se <- round(plot.temp.mod$se[names(coef(plot.temp.mod))=="temp.s"], 4)
+```
+
+The effect of sqrt(+1°C) on temperature difference on $log(h^2 + 0.2)$ (±SE) across the entire dataset (while accounting for trait type, not heritability type) is: `r temp.s.beta` ± `r temp.s.beta.se`.
+
+<!-- sqrt temp difference effect = 0.0189 ± 0.053 S.E. -->
+
+```{r}
+plot.temp.mod <- final.model.Di %>% update(. ~ trait + h2 + temp.s, data=dat_tm)
+
+# Get values for plot:
+temp.s.beta <- round(coef(plot.temp.mod)["temp.s"], 4)
+temp.s.beta.se <- round(plot.temp.mod$se[names(coef(plot.temp.mod))=="temp.s"], 4)
+```
+
+Using the data subset, the effect of sqrt(+1°C) on temperature difference on $log(h^2 + 0.2)$ (±SE) across the entire dataset (while accounting for heritability type and trait type) is: `r temp.s.beta` ± `r temp.s.beta.se`.
+
+<!-- sqrt temp difference effect = 0.0299 ± 0.0527 S.E. -->
+
+Next, we manually predict the lines of best fit for a plot of temperature vs. hertability. We must do so manually since the final model of best fit is of class rma.mv, of which predict does not currently work with in the metafor package.
+
+```{r}
+
+missing.trait <- !(trait.levels %in% levels(dat_tm$trait))
+new.levels <- trait.levels[!missing.trait]
+new.colors <- rev(trait.colors)[!missing.trait]
+
+# create data.frame for equation of lines to plot:
+abline_equation <- dat_tm %>% filter(!is.na(temp.s)) %>%
+	mutate(h2_2 = factor(h2, labels = c("Broad-sense", "Narrow-sense"))) %>%
+	group_by(h2_2) %>% # group by if h2 is included in the model!
+	summarise(mean_h2 = mean(val.log), # quick hacky-way to get mean values (not strictly correct)
+			  mean_temp = (mean(temp.s))) %>%
+	mutate(temp.s.slope = temp.s.beta, # slope from h2~trait+h2+temp.diff model
+		   temp.s.intercept = mean_h2 - mean_temp*temp.s.slope) # intercept = y_mean - slope * x_mean
+
+p4 <-
+	dat_tm %>%
+	mutate(h2_2 = factor(h2, labels = c("Broad-sense", "Narrow-sense"))) %>%
+	ggplot(aes(y=val.log, x=temp.s, col=trait)) + 
+	facet_wrap(h2_2 ~ .) +
+	guides(shape = "legend") +
+	labs(y="Heritability estimate", 
+		 x="Temperature difference (+°C)") +
+	coord_cartesian(ylim =  log(c(-0.0006, 1)+0.2)) +
+	scale_y_continuous(
+		expand = c(0.01, 0.01),
+		breaks=log( c(0,0.10,0.25,0.5,0.75,1)+0.2),
+		labels =    c(0,0.10,0.25,0.5,0.75,1)) +
+	scale_x_continuous(
+		limits =  sqrt(c(0,10)),
+		expand = c(0.01,0.01),
+		breaks=sqrt(c(0:10)),
+		labels=0:10
+	) +
+	theme(panel.grid = element_blank(),
+		  strip.background = element_rect(fill="white"),
+		  strip.text = element_text(colour = "black", size=rel(1.25))) +
+	
+	# Add fill legend:
+	# geom_point(aes(y=val.log+5, fill=trait),
+	# 		   color="white", shape=21, size=4, stroke=0) +
+	scale_shape_manual(name = "Heritability:",
+					   values = c(21, 21),
+					   labels = c(expression("broad-sense, "*italic(H^2)),
+					   		      expression("narrow-sense, "*italic(h^2)))) +
+	geom_point(aes(y=val.log, fill=trait, size=sqrt(1/sv.log)),
+			   color="white", stroke=0.1, alpha=1, shape=21) +
+	scale_fill_manual(name = "Trait type:",	values = new.colors, 
+					  guide = guide_legend(order = 1, reverse = TRUE, override.aes = list(size = 3))) +
+		scale_size_continuous(
+			name = "Study precision\n(inverse of \nstandard error):",
+			breaks=c(5,10,15,20),
+			guide = guide_legend(order = 2, override.aes = list(fill = "grey")))
+p4 <- p4 + geom_abline(data = abline_equation, 
+					   color="black", linetype = "dashed",
+					   aes(intercept = temp.s.intercept, 
+					   	slope = temp.s.slope)) # 750 x 350
+```
+
+```{r, fig.cap = "**Fig. 4.** Heritability vs. study temperature difference (treatment temperature relative to ambient/control temperature) for each trait type and heritability type, with the size of each point represents its relative precision (i.e., 1/sampling variance) and thus weighting in the analysis. Black lines indicate the estimated marginal mean effect of (square-root) temperature difference (sqrt[temperature difference] slope ± S.E. = 0.0295 ± 0.0528 log-(h2+0.2) heritability units), after accounting for trait type and heritability type effects."}
+
+# Save it:
+setEPS()
+postscript("Figures/Fig4.eps", family="Helvetica", width=8, height=4)
+grid.newpage(); grid.draw(p4)
+dev.off()
+
+p4
+```
+
+
+# Metafor summary statistics
+
+In addition to $\tau^2$, `anova.rma()` outputs the pseudo-R² statistic (Raudenbush, 2009), the *residual heterogeneity* or I² (Higgins and Thompson, 2002), and the *unaccounted variability* or H² (see Table below).
+
+
+Statistic | Definition | Formula
+---------|-------------------------------------------------- | -----------------
+$\tau^2$ | amount of residual heterogeneity (not accounted for by model moderators) |
+$R^2$ | percent of residual heterogeneity not accounted for in the reduced model that is in the full model with moderators | $$R^{2} =  \frac{\hat{\tau}^{2}_{reduced}-\hat{\tau}^{2}_{full}}{\hat{\tau}^{2}_{reduced}}$$
+$I^2$ | percent of variance in the observed effects or outcomes that is residual heterogeneity (i.e., that is $\tau^2$) | $$I^{2} = 100\% \times \frac{\hat{\tau}^{2}}{\hat{\tau}^{2}+\tilde{v}} $$
+$H^2$ | ratio of the total amount of variability in the effect size estimates to the amount of sampling variability | $$ H² = \frac{\hat{\tau}^{2} + \tilde{v}}{ \tilde{v}} $$
+
+Both H² and I² are calculated using the within-study sampling variances, $\tilde{v}$, which in turn is based on the inverse variance scaling of $w_{i} = 1/v_{i}$ for the $i^{th}$ study:
+$$\tilde{v}=\frac{(k-1)\sum w_{i}}{\left(\sum w_{i} \right)^{2}-\sum w^{2}_{i}} $$
+
+Note that these values may not be accurate unless k is large (Lopez-Lopez et al., 2014). Also, note that they will depend on the estimator (ML or REML) being used and R² is only computed for mixed-effects model that include an intercept.
+
+# Explanatory factors
+
+Heritability type | 
+---------|---------------------------------------------------------
+**broad-sense $$H^{2}$$** | the proportion of phenotypic variation $\sigma^{2}_{P}$ explained by genetic effects ($\sigma^{2}_{G}$) including variation associated with additive ($\sigma^{2}_{A}$), dominance ($\sigma^{2}_{D}$), and epistatic effects ($\sigma^{2}_{I}$) $$H^{2} = \frac{\sigma^{2}_{G}}{\sigma^{2}_{P}}=\frac{\sigma^{2}_{A}+\sigma^{2}_{D}+\sigma^{2}_{I}}{\sigma^{2}_{P}}$$
+**narrow-sense $$h^{2}$$** | the proportion of phenotypic variation $\sigma^{2}_{P}$ explained by additive genetic effects ($\sigma^{2}_{A}$) $$h^{2} = \frac{\sigma^{2}_{A}}{\sigma^{2}_{P}}$$
+
+
+Trait type | 
+---------|---------------------------------------------------------
+**gene expression**  | up- or down-regulation of various genes involved in intracellular stress pathways
+**photochemistry** | measures of symbiont photochemistry, chromoprotein content
+**growth** | coral or corallite growth measures including calcification rates, buoyant weight change, larval areal expansion, linear extension, and new growth branches
+**nutrient content** | total protein or carbohydrate content present in hosts or whole holobiont tissues
+**bleaching** | symbiont cell densities or change in cell densities (during a treatment), bleaching index scores (proxy for symbiont cell density), and Chlorophyll A content (correlated to symbiont cell density)
+**morphology** | static intraspecific corallite measurements and larval volumes upon birth
+**symbiont community** | symbiont community indices (e.g., Leinster and Cobbald's D), and proportion of *Durusdinium* symbionts
+**immune response** | catalase and phenoloxidase activity within holobiont tissues
+**survival** | measures of survival/mortality/settlement success including counts of settlement success or survival, percent survival/mortality at the end of a fixed period, larval survival through high temperatures, or differences in survival between control and temperature treatments
+**gamete compatibility** | π-value, the percent larval contribution of various sires to various dams (excluded from the analysis due to only one estimate)
+
+Coral life stage | 
+---------|---------------------------------------------------------
+**larvae** | estimates for free-swimming gamete or planula larvae stages (often asymbiotic) up to successful settlement
+**juvenile** | estimates from post-settlement to sexually-mature adult
+**adult** | estimates after sexual maturity or using adult coral nubbins
+
+
+Temperature | 
+--------------------|----------------------------------------------
+**temperature manipulation** | binary factor of whether the study intentionally manipulated the temperatures higher than ambient conditions
+**temperature magnitude** | difference in degrees Celsius between temperature treatment and ambient (control) conditions
+
+Growth form | 
+--------------------|----------------------------------------------
+**corymbose** | finger-like corals
+**branching** | arborescent; tree-like corals
+**massive** | ball- or boulder-shaped corals
+**columnar** | upward-growing cylindrical corals
+**encrusting** | low, spreading corals often on hard, rocky substrates
+
+
+
+
+
+----
+```{r echo=FALSE}
+sessionInfo()
+```
+
