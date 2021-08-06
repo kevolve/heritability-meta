@@ -28,7 +28,7 @@ x <- paste0(patt,"_",format(Sys.time(), '%Y-%m-%d'), ".html")
 y <- list.files(pattern = glob2rx(paste0(patt,"*.html")))
 y <- y[!(y == x)]
 unlink(y, recursive=T)
-setwd("~/Documents/PhD Thesis/Heritability meta")
+setwd("~/Documents/PhD Thesis/Heritability meta-analysis")
 
 myAIC <- function(..., aic=F, aicc=T, waic=F, 
 				  delta_aic=F, delta_aicc=T, pvals=F, 
@@ -112,9 +112,9 @@ h3 { color: #f8f8f8; background-color: #437FAA; text-align: center; }
 
 # Start
 
-```{r, include=FALSE}
+```{r, class.source = 'fold-show'}
 # rm(list=ls())
-setwd("~/Documents/PhD Thesis/Heritability meta")
+setwd("~/Documents/PhD Thesis/Heritability meta-analysis")
 
 library(readxl)
 library(tidyverse); theme_set(theme_light())
@@ -1480,8 +1480,10 @@ par(mfrow=c(1,1))
 dat_shg[x < -1,] %>% select(study, species, trait, stage, h2, val)
 
 update(final.model.C, .~., data=dat_shg[x > -1,]) %>%
-	funnel() # Funnel looks good once that one point is removed!
+	funnel()
 ```
+
+Funnel looks good once that one category with n=1 is removed!
 
 #### Fail-safe number  Cook's distance
 
@@ -1499,7 +1501,6 @@ points(cdist.i, cdist[cdist.i], col="red", pch=16)
 dat_shg[cdist.i,] %>% select(study, trait, stage, h2, val) %>% mutate(cdist = cdist[cdist.i])
 update(final.model.C, .~., data=dat_shg[-cdist.i[3],])
 
-# dat_shg %>% table.plot("stage", "trait", .) 
 
 ```
 
@@ -1601,9 +1602,10 @@ xsim %>%
 		labels =      c(0,0.10,0.25,0.5,0.75,1)) +
 	labs(x="Heritability estimate", y=expression("Weighting (1/SE"^2*")"))
 
-# Seems that the model is in general simulating the true data ok!
-# Main problem is that values are simulating beyond the bounds of possible heritability.
+
 ```
+
+Seems that the model is in general simulating the true data ok. Main problem is that values are simulating beyond the bounds of possible heritability.
 
 
 <!-- ```{r, eval=F, include=F} -->
@@ -1638,11 +1640,9 @@ dat_tm %>% table.plot("stage", "trait", .) # no other interactions possible!
 dat_tm %>% table.plot("h2", "trait", .) # no other interactions possible!
 dat_tm %>% table.plot("growth.form", "trait", .) # no other interactions
 
-# Life stage, heritability type, and growth form are all signular for the photochemistry and immune response categories (all entirely overlapping for these trait types)
-
 ```
 
-
+Life stage, heritability type, and growth form are all signular for the photochemistry and immune response categories (all entirely overlapping for these trait types)
 ### Step 1: Define beyond optimal model
 
 Beyond optimal is simply trait x temp differential:
@@ -2032,8 +2032,6 @@ this sub-analysis. $$ logit(h^2) \sim N(\mu, \tau^2) \\
 
 ```{r}
 ## Compare random effects (fixed effects included)
-# dat_tm <- dat_tm %>% filter(!(growth.form %in%  c("columnar", "encrusting"))) %>%
-# 	mutate(growth.form = factor(growth.form))
 
 m.study.nested <- rma.mv(yi=val.log ~ trait*temp.manip + stage + h2 + growth.form,
 						 V=sv.log, random = ~1|study/est.id, 

@@ -29,7 +29,7 @@ x <- paste0(patt,"_",format(Sys.time(), '%Y-%m-%d'), ".html")
 y <- list.files(pattern = glob2rx(paste0(patt,"*.html")))
 y <- y[!(y == x)]
 unlink(y, recursive=T)
-setwd("~/Documents/PhD Thesis/Heritability meta")
+setwd("~/Documents/PhD Thesis/Heritability meta-analysis")
 rm(list=ls());
 ```
 
@@ -42,7 +42,7 @@ h3 { color: #f8f8f8; background-color: #437FAA; text-align: center; }
 
 ---
 
-```{r, include=FALSE}
+```{r, class.source = 'fold-show'}
 rm(list=ls())
 
 ## Install the required packages if not previously installed, e.g.:
@@ -53,7 +53,7 @@ library(metafor)
 library(grid)
 library(gridExtra)
 library(quantreg)
-source('~/Documents/PhD Thesis/Heritability meta/Functions/useful_functions.R')
+source('~/Documents/PhD Thesis/Heritability meta-analysis/Functions/useful_functions.R')
 # using qlogis() for logit, plogis() for inverse logit
 
 data <- read_excel("Data/heritability_estimates.xlsx", sheet="h2")
@@ -749,7 +749,7 @@ We now save this final transformed dataset with imputed SEs to be used in subseq
 
 # Save final values
 
-```{r reorganize and save final data, include=F, eval=T}
+```{r reorganize and save final data, class.source = 'fold-show'}
 
 # get new levels in order of each trait coefficient
 final.model <- rma.mv(yi=val.log ~ trait-1, V=(se.log^2), 

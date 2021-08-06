@@ -36,7 +36,7 @@ x <- paste0(patt,"_",format(Sys.time(), '%Y-%m-%d'), ".html")
 y <- list.files(pattern = glob2rx(paste0(patt,"*.html")))
 y <- y[!(y == x)]
 unlink(y, recursive=T)
-setwd("~/Documents/PhD Thesis/Heritability meta")
+setwd("~/Documents/PhD Thesis/Heritability meta-analysis")
 rm(list=ls())
 
 ## cache is only valid with a specific version of R and session info
@@ -55,9 +55,9 @@ h3 { color: #f8f8f8; background-color: #437FAA; text-align: center; }
 
 
 # Start
-```{r}
+```{r, class.source = 'fold-show'}
 rm(list=ls())
-setwd("~/Documents/PhD Thesis/Heritability meta")
+setwd("~/Documents/PhD Thesis/Heritability meta-analysis")
 
 
 library(readxl)
