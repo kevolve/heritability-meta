@@ -595,7 +595,7 @@ subA_mod_est
 ```
 
 
-These estimates are used to calculate effect sizes in separate excel spreadsheets (found at my github repo: [ecolology/heritabilitymeta](https://github.com/ecolology/heritabilitymeta))
+These estimates are used to calculate effect sizes in separate excel spreadsheets (found at my github repo: [ecolology/heritability-meta](https://github.com/ecolology/heritability-meta))
 
 
 #### Post-hoc contrasts of life stage x trait type
