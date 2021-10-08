@@ -18,9 +18,9 @@
 # You can create any custom variable you would like, and they will be accessible
 # in the templates via {{ site.myvariable }}.
 
-title: Heritability meta-analysis 2021
+title: "Coral Heritability Meta-analysis: Supplementary Code Documentation"
 email: kevin.bairosnovak@my.jcu.edu.au
-description: Code and html documents on our meta-analysis of coral heritability estimates.
+description: Supplementary code and figures for our meta-analysis of coral heritability estimates.
 domain: ecolology.github.io       # if you want to force HTTPS, specify the domain without the http at the start, e.g. example.com
 url: https://ecolology.github.io  # the base hostname and protocol for your site, e.g. http://example.com
 baseurl: /heritability-meta/      # place folder name if the site is served in a subfolder
@@ -31,6 +31,15 @@ github_username:  ecolology
 theme: minima
 plugins:
   - jekyll-feed
+  - jekyll-relative-links
+
+relative_links:
+  enabled: true
+  collections: true
+
+markdown: kramdown
+kramdown:
+  input: Kramdown
 
 # Exclude from processing.
 # The following items will not be processed, by default.
@@ -40,7 +49,10 @@ plugins:
 # Excluded items can be processed by explicitly listing the directories or
 # their entries' file path in the `include:` list.
 #
-# exclude:
+exclude:
+   - Supplementary_Code_Documentation_A_Pre-processing.md
+   - Supplementary_Code_Documentation_A_Pre-processing.Rmd
+   - /Supplementary_Code_Documentation_A_Pre-processing_files/
 #   - .sass-cache/
 #   - .jekyll-cache/
 #   - gemfiles/
