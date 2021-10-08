@@ -16,15 +16,15 @@ output:
     fig_caption: yes
     code_folding: hide
     self_contained: TRUE
+    keep_md: yes
 editor_options: 
   chunk_output_type: console
 knit: (function(inputFile, ...) {
+      envir = globalenv()
     rmarkdown::render(
       inputFile,
       output_file = paste0(
         xfun::sans_ext(inputFile),"_",format(Sys.time(), '%Y-%m-%d'), ".html"),
-      envir = globalenv()
-    )})
 ---
 
 
