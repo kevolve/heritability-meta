@@ -22,7 +22,7 @@ title: Heritability meta-analysis 2021
 email: kevin.bairosnovak@my.jcu.edu.au
 description: Code and html documents on our meta-analysis of coral heritability estimates.
 baseurl: "" # the subpath of your site, e.g. /blog
-url: "" # the base hostname & protocol for your site, e.g. http://example.com
+url: "https://ecolology.github.io/heritability-meta/" # the base hostname & protocol for your site, e.g. http://example.com
 twitter_username: ecolology
 github_username:  ecolology
 
